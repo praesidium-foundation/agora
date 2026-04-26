@@ -3,6 +3,7 @@ import LandingPage from './pages/LandingPage'
 import LoginPage from './pages/LoginPage'
 import Dashboard from './pages/Dashboard'
 import AYEManagement from './pages/admin/AYEManagement'
+import TuitionWorksheet from './pages/modules/TuitionWorksheet'
 import ProtectedRoute from './lib/ProtectedRoute'
 
 function App() {
@@ -24,6 +25,14 @@ function App() {
           element={
             <ProtectedRoute>
               <AYEManagement />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/modules/tuition"
+          element={
+            <ProtectedRoute>
+              <TuitionWorksheet />
             </ProtectedRoute>
           }
         />

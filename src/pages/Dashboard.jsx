@@ -1,10 +1,15 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthProvider'
+import { useModulePermission } from '../lib/usePermission'
 
 function Dashboard() {
   const navigate = useNavigate()
   const { user, profile } = useAuth()
+  const { allowed: canViewTuition } = useModulePermission(
+    'tuition_worksheet',
+    'view'
+  )
 
   async function handleSignOut() {
     await supabase.auth.signOut()
@@ -39,6 +44,17 @@ function Dashboard() {
             </span>
           )}
         </div>
+
+        {canViewTuition && (
+          <div className="mb-6">
+            <Link
+              to="/modules/tuition"
+              className="text-gold hover:text-white underline underline-offset-4"
+            >
+              Tuition Worksheet →
+            </Link>
+          </div>
+        )}
 
         {profile?.is_system_admin && (
           <div className="mb-10">
