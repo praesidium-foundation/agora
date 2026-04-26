@@ -251,16 +251,16 @@ function AYEManagement() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-cream-highlight">
-                  <th className="px-4 py-3 text-left font-display text-[11px] tracking-[0.08em] uppercase font-normal text-navy/60">
+                  <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">
                     Label
                   </th>
-                  <th className="px-4 py-3 text-left font-display text-[11px] tracking-[0.08em] uppercase font-normal text-navy/60">
+                  <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">
                     Start
                   </th>
-                  <th className="px-4 py-3 text-left font-display text-[11px] tracking-[0.08em] uppercase font-normal text-navy/60">
+                  <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">
                     End
                   </th>
-                  <th className="px-4 py-3 text-left font-display text-[11px] tracking-[0.08em] uppercase font-normal text-navy/60">
+                  <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">
                     Status
                   </th>
                 </tr>
