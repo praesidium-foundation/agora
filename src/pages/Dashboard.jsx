@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/AuthProvider'
 
@@ -39,6 +39,17 @@ function Dashboard() {
             </span>
           )}
         </div>
+
+        {profile?.is_system_admin && (
+          <div className="mb-10">
+            <Link
+              to="/admin/ayes"
+              className="text-gold hover:text-white underline underline-offset-4"
+            >
+              Manage Academic Years →
+            </Link>
+          </div>
+        )}
 
         <button
           type="button"
