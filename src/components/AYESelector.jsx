@@ -44,12 +44,12 @@ function AYESelector({ value, onChange }) {
   }, [])
 
   if (loading) {
-    return <p className="text-gold/70 text-sm">Loading academic years…</p>
+    return <p className="text-muted text-sm">Loading academic years…</p>
   }
 
   if (error) {
     return (
-      <p className="text-red-300 text-sm">
+      <p className="text-status-red text-sm">
         Could not load academic years: {error}
       </p>
     )
@@ -57,22 +57,23 @@ function AYESelector({ value, onChange }) {
 
   if (ayes.length === 0) {
     return (
-      <p className="text-white/60 text-sm italic">
-        No academic years exist yet.
-      </p>
+      <p className="text-muted text-sm italic">No academic years exist yet.</p>
     )
   }
 
   return (
     <div>
-      <label htmlFor="aye-select" className="block text-white/70 text-sm mb-1">
+      <label
+        htmlFor="aye-select"
+        className="block font-body text-[11px] text-muted uppercase tracking-wider mb-1.5"
+      >
         Academic Year
       </label>
       <select
         id="aye-select"
         value={value || ''}
         onChange={(e) => onChange(e.target.value)}
-        className="bg-navy border border-gold/40 text-white px-4 py-2 focus:border-gold focus:outline-none cursor-pointer"
+        className="bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none cursor-pointer min-w-[180px]"
       >
         {ayes.map((aye) => (
           <option key={aye.id} value={aye.id}>

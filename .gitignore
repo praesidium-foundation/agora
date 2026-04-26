@@ -17,6 +17,9 @@ dist-ssr
 .env.local
 .env.*.local
 
+# Design reference mockup (visual source of truth, not deployed)
+design-reference.html
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

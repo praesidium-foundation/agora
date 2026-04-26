@@ -3,6 +3,10 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useModulePermission } from '../../lib/usePermission'
 import AYESelector from '../../components/AYESelector'
+import AppShell from '../../components/AppShell'
+import Card from '../../components/Card'
+import Badge from '../../components/Badge'
+import SectionLabel from '../../components/SectionLabel'
 
 const usd = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -10,13 +14,26 @@ const usd = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 0,
 })
 
+// Schema target — 102% of expenses, fixed in migration 003 (was 1.20 typo in 001).
 const RATIO_TARGET = 1.02
 
 function Row({ label, value, valueClassName = '' }) {
   return (
     <div className="flex justify-between items-baseline text-sm">
-      <span className="text-white/70">{label}</span>
-      <span className={`text-white tabular-nums ${valueClassName}`}>{value}</span>
+      <span className="font-body text-muted">{label}</span>
+      <span className={`font-body text-navy tabular-nums ${valueClassName}`}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function Section({ children, divided = false }) {
+  return (
+    <div
+      className={`space-y-1 ${divided ? 'pt-3 border-t-[0.5px] border-card-border' : ''}`}
+    >
+      {children}
     </div>
   )
 }
@@ -34,75 +51,66 @@ function ScenarioCard({ s }) {
   const ratioDisplay = ratio !== null ? `1 : ${ratio.toFixed(2)}` : '—'
 
   return (
-    <div className="border border-gold/30 p-5 flex flex-col">
-      <div className="flex items-baseline justify-between mb-4">
-        <span className="font-display text-gold text-3xl">
-          {s.scenario_label}
-        </span>
-        {s.is_recommended && (
-          <span className="bg-gold text-navy px-2 py-0.5 text-xs uppercase tracking-wider">
-            Recommended
-          </span>
-        )}
-      </div>
+    <Card
+      title={`Scenario ${s.scenario_label}`}
+      action={s.is_recommended ? <Badge variant="navy">Recommended</Badge> : null}
+    >
+      <div className="space-y-4">
+        <Section>
+          <Row label="Proposed Rate" value={usd.format(s.proposed_rate)} />
+          <Row label="Curriculum Fee" value={usd.format(s.curriculum_fee_rate)} />
+          <Row label="Enrollment Fee" value={usd.format(s.enrollment_fee_rate)} />
+          <Row label="Volunteer Buyout" value={usd.format(s.volunteer_buyout_fee)} />
+        </Section>
 
-      <div className="space-y-1 pb-3 mb-3 border-b border-gold/20">
-        <Row label="Proposed Rate" value={usd.format(s.proposed_rate)} />
-        <Row label="Curriculum Fee" value={usd.format(s.curriculum_fee_rate)} />
-        <Row label="Enrollment Fee" value={usd.format(s.enrollment_fee_rate)} />
-        <Row
-          label="Volunteer Buyout"
-          value={usd.format(s.volunteer_buyout_fee)}
-        />
-      </div>
+        <Section divided>
+          <Row label="Students" value={s.projected_students} />
+          <Row label="Families" value={totalFamilies} />
+        </Section>
 
-      <div className="space-y-1 pb-3 mb-3 border-b border-gold/20">
-        <Row label="Students" value={s.projected_students} />
-        <Row label="Families" value={totalFamilies} />
-      </div>
+        <Section divided>
+          <Row label="Net Tuition" value={usd.format(s.net_tuition || 0)} />
+          <Row
+            label="Ed Program $"
+            value={usd.format(s.total_ed_program_dollars || 0)}
+          />
+          <Row
+            label="Projected Expenses"
+            value={usd.format(s.projected_expenses)}
+          />
+        </Section>
 
-      <div className="space-y-1 pb-3 mb-3 border-b border-gold/20">
-        <Row label="Net Tuition" value={usd.format(s.net_tuition || 0)} />
-        <Row
-          label="Ed Program $"
-          value={usd.format(s.total_ed_program_dollars || 0)}
-        />
-        <Row
-          label="Projected Expenses"
-          value={usd.format(s.projected_expenses)}
-        />
-      </div>
-
-      <div className="space-y-2 mt-auto">
-        <div className="flex justify-between items-center text-sm">
-          <span className="flex items-center gap-2 text-white/70">
+        <div className="space-y-2 pt-3 border-t-[0.5px] border-card-border">
+          <div className="flex justify-between items-center text-sm">
+            <span className="flex items-center gap-2 font-body text-muted">
+              <span
+                className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  ratioGood ? 'bg-status-green' : 'bg-status-red'
+                }`}
+              />
+              Ratio
+            </span>
             <span
-              className={`inline-block w-2 h-2 rounded-full ${
-                ratioGood ? 'bg-green-400' : 'bg-red-400'
+              className={`tabular-nums font-medium ${
+                ratioGood ? 'text-status-green' : 'text-status-red'
               }`}
-            />
-            Ratio
-          </span>
-          <span
-            className={`tabular-nums font-semibold ${
-              ratioGood ? 'text-green-300' : 'text-red-300'
-            }`}
-          >
-            {ratioDisplay}
-          </span>
-        </div>
-        <div className="flex justify-between items-center text-sm">
-          <span className="text-white/70">Fundraising</span>
-          <span
-            className={`tabular-nums ${
-              fundraising > 0 ? 'text-amber-300 font-semibold' : 'text-white'
-            }`}
-          >
-            {usd.format(fundraising)}
-          </span>
+            >
+              {ratioDisplay}
+            </span>
+          </div>
+          <div className="flex justify-between items-center text-sm">
+            <span className="font-body text-muted">Fundraising</span>
+            <span
+              className={`font-body tabular-nums ${
+                fundraising > 0 ? 'text-status-amber font-medium' : 'text-navy'
+              }`}
+            >
+              {usd.format(fundraising)}
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -188,93 +196,84 @@ function TuitionWorksheet() {
 
   if (permLoading) {
     return (
-      <div className="min-h-screen bg-navy text-white flex items-center justify-center font-body">
-        <p className="text-gold">Loading…</p>
-      </div>
+      <AppShell>
+        <p className="text-muted">Loading…</p>
+      </AppShell>
     )
   }
 
   if (!allowed) {
     return (
-      <div className="min-h-screen bg-navy text-white font-body">
-        <header className="border-b border-gold/20 px-6 py-4 flex items-center gap-3">
-          <img src="/logo-mark-white.png" alt="" className="h-10" />
-          <span className="font-display text-gold text-xl">Libertas Agora</span>
-        </header>
-        <main className="max-w-3xl mx-auto px-6 py-12 text-center">
-          <h1 className="font-display text-gold text-3xl mb-4">
-            You don't have access to this module.
-          </h1>
-          <p className="text-white/70 mb-8">
-            Tuition Worksheet access requires the appropriate module permission.
-          </p>
-          <Link
-            to="/dashboard"
-            className="inline-block border border-gold text-gold px-6 py-2 hover:bg-gold hover:text-navy transition-colors"
-          >
-            Back to Dashboard
-          </Link>
-        </main>
-      </div>
+      <AppShell>
+        <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
+          You don't have access to this module.
+        </h1>
+        <p className="text-body mb-6">
+          Tuition Worksheet access requires the appropriate module permission.
+        </p>
+        <Link
+          to="/dashboard"
+          className="inline-block bg-navy text-gold px-4 py-2 rounded text-sm hover:opacity-90 transition-opacity"
+        >
+          Back to Dashboard
+        </Link>
+      </AppShell>
     )
   }
 
   return (
-    <div className="min-h-screen bg-navy text-white font-body">
-      <header className="border-b border-gold/20 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <img src="/logo-mark-white.png" alt="" className="h-10" />
-          <span className="font-display text-gold text-xl">Libertas Agora</span>
-        </div>
-        <Link to="/dashboard" className="text-gold/80 hover:text-gold text-sm">
-          ← Dashboard
-        </Link>
-      </header>
+    <AppShell>
+      <h1 className="font-display text-navy text-[28px] mb-1 leading-tight">
+        Tuition Worksheet
+      </h1>
+      <p className="font-body italic text-muted mb-6">
+        Tuition rates, scenarios, and projections for the selected academic year
+      </p>
 
-      <main className="max-w-7xl mx-auto px-6 py-12">
-        <p className="uppercase tracking-[0.3em] text-gold text-xs mb-2">
-          Libertas Academy
+      <div className="mb-8">
+        <AYESelector value={selectedAyeId} onChange={setSelectedAyeId} />
+      </div>
+
+      {dataError && (
+        <p className="text-status-red text-sm mb-6" role="alert">
+          {dataError}
         </p>
-        <h1 className="font-display text-gold text-4xl md:text-5xl mb-8">
-          Tuition Worksheet
-          {aye?.label ? ` — ${aye.label}` : ''}
-        </h1>
+      )}
 
-        <div className="mb-8">
-          <AYESelector value={selectedAyeId} onChange={setSelectedAyeId} />
-        </div>
+      {dataLoading && <p className="text-muted">Loading…</p>}
 
-        {dataError && (
-          <p className="text-red-300 text-sm mb-6" role="alert">
-            {dataError}
-          </p>
-        )}
+      {!dataLoading && !dataError && selectedAyeId && !worksheet && (
+        <p className="text-muted italic">
+          No tuition worksheet exists for {aye?.label || 'this AYE'} yet.
+        </p>
+      )}
 
-        {dataLoading && <p className="text-gold/70">Loading…</p>}
+      {!dataLoading && worksheet && (
+        <>
+          {worksheet.narrative && (
+            <section className="mb-10">
+              <SectionLabel>Recommendation</SectionLabel>
+              <div className="max-w-3xl">
+                <Card>
+                  <p className="font-body italic text-body leading-relaxed">
+                    {worksheet.narrative}
+                  </p>
+                </Card>
+              </div>
+            </section>
+          )}
 
-        {!dataLoading && !dataError && selectedAyeId && !worksheet && (
-          <p className="text-white/60 italic">
-            No tuition worksheet exists for this AYE yet.
-          </p>
-        )}
-
-        {!dataLoading && worksheet && (
-          <>
-            {worksheet.narrative && (
-              <p className="mb-8 max-w-3xl text-white/80 italic leading-relaxed">
-                {worksheet.narrative}
-              </p>
-            )}
-
+          <section>
+            <SectionLabel>Scenarios</SectionLabel>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {scenarios.map((s) => (
                 <ScenarioCard key={s.id} s={s} />
               ))}
             </div>
-          </>
-        )}
-      </main>
-    </div>
+          </section>
+        </>
+      )}
+    </AppShell>
   )
 }
 
