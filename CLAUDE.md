@@ -46,15 +46,7 @@ All colors are exposed as Tailwind tokens (see `tailwind.config.js`).
 
 ## Database & migration conventions
 
-**GRANT discipline.** Every migration that creates a new table must end with:
-
-```sql
-grant select, insert, update, delete on <table_name> to authenticated;
-```
-
-Postgres GRANTs do not apply retroactively to tables created after a global grant. Migration 001's `grant ... on all tables in schema public to authenticated` covers only the tables existing at that moment. Without an explicit per-table grant, RLS-protected tables fail with "permission denied for table" *before* policies are evaluated — the failure looks like an RLS bug but isn't. Codified in `agora_architecture.md` Appendix D. Future task: a single `alter default privileges` migration could resolve this systemically.
-
-Same rule applies to functions: explicit `grant execute on function <name>(...) to authenticated;` per new function.
+**GRANT discipline.** Migration 006 sets default privileges so any future table, sequence, or function created in `public` automatically grants the appropriate privileges to the `authenticated` role. RLS continues to gate row-level access. New migrations no longer need to issue per-table GRANTs. If a "permission denied for table X" error appears in any new migration, verify the migration is being run as `postgres` or `supabase_admin` (which is the case for all Supabase migrations); other creator roles would not inherit the default privileges.
 
 ## Architecture reference
 

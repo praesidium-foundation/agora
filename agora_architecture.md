@@ -1457,15 +1457,16 @@ Each phase delivers usable value while building toward the full vision. Specific
 - **Migration 003**: Tuition target ratio fix (`tg_compute_tuition_scenario_totals` corrected from 1.20 → 1.02 typo in 001; existing rows recomputed)
 - **Migration 004**: Chart of Accounts schema (self-referential hierarchy, type-inheritance + leaf-only flag triggers [latter superseded by 005], semantic flag CHECK, cycle-prevention trigger, `is_leaf_account()` helper, RLS, `chart_of_accounts` module + admin permission seed, change_log read policy extended). Amended after initial run to include the `grant select, insert, update, delete on chart_of_accounts to authenticated` line missing from the first cut.
 - **Migration 005**: Chart of Accounts posting vs summary model — adds `posts_directly` column, drops the leaf-only flag trigger, replaces with posting-only flag trigger, adds `is_posting_account()` helper. Resolves the leaf-only flaw that prevented flagging parent accounts that post directly (e.g., "Revenue – Tuition" with a "Tuition Discounts" subtree).
+- **Migration 006**: Default privileges for `authenticated` role on `public` schema — `ALTER DEFAULT PRIVILEGES` for tables, sequences, and functions created by `postgres` and `supabase_admin`, plus a catch-up grant on existing objects. Resolves the GRANT discipline class of bug (Migration 004 hit this; 005 worked around it with a per-table grant). Future migrations no longer need explicit per-table grants.
 
 ### Migrations needed (per this architecture)
 
-- **Migration 006**: Refactor `preliminary_budget` and `final_budget` for chart-of-accounts FK (validated via `is_posting_account()`), scenario structure
-- **Migration 007**: Strategic Plan schemas (three instruments)
-- **Migration 008**: Snapshot tables for Budget, Tuition, Staffing, Enrollment
-- **Migration 009**: Board Composition + Committees
-- **Migration 010**: Org Acronyms registry, Custom KPI registry
-- **Migration 011**: Module-to-Account mappings
+- **Migration 007**: Refactor `preliminary_budget` and `final_budget` for chart-of-accounts FK (validated via `is_posting_account()`), scenario structure
+- **Migration 008**: Strategic Plan schemas (three instruments)
+- **Migration 009**: Snapshot tables for Budget, Tuition, Staffing, Enrollment
+- **Migration 010**: Board Composition + Committees
+- **Migration 011**: Org Acronyms registry, Custom KPI registry
+- **Migration 012**: Module-to-Account mappings
 - (Additional migrations as build phases progress)
 
 ---
@@ -1504,7 +1505,7 @@ Tactical gaps documented here for future hardening. Not architectural decisions 
 
 - **RLS column-granularity gap (Chart of Accounts).** Edit-level users can technically deactivate or reparent accounts in `chart_of_accounts` via direct API calls. Postgres RLS UPDATE policies cannot easily distinguish *which column* an UPDATE touches, so the policy permits any UPDATE if the user has `edit` permission. UI-level gating is in place — the Deactivate / Reparent affordances only render for users with `approve_lock` permission — but a determined edit user could bypass via the JS console. Acceptable for the current single-school trust model where every edit-level user is staff at the same institution. Future hardening: implement column-aware UPDATE checks via a BEFORE UPDATE trigger when multi-school onboarding makes the trust model less homogeneous.
 
-- **GRANT discipline reminder.** Every migration that creates a new table must end with `grant select, insert, update, delete on <table_name> to authenticated`. Postgres GRANTs don't apply retroactively to tables created after a global grant. Without the per-table grant, RLS-protected tables fail with "permission denied" before policies are evaluated. Codified in CLAUDE.md. Alternative: a single `alter default privileges` migration could resolve this systemically — track as a future task.
+- **GRANT discipline (resolved in Migration 006).** Default privileges are now set on the public schema so future tables, sequences, and functions automatically grant SELECT/INSERT/UPDATE/DELETE/EXECUTE to the `authenticated` role. RLS continues to enforce row-level access.
 
 ---
 
@@ -1520,6 +1521,7 @@ Version history:
 - **v1.0** — April 26, 2026 — Initial consolidation from design conversations
 - **v1.1** — April 27, 2026 — Migration ordering corrected: Chart of Accounts now precedes Budget refactor (was reversed in v1.0). Appendix B updated to reflect Migration 003 (tuition target ratio fix) which was implemented but missing from the list. COA schema implemented as Migration 004; Budget refactor renumbered to 005; subsequent migrations renumbered accordingly.
 - **v1.2** — April 27, 2026 — Posting vs summary account model. Section 4 rewritten: leaf-only governance flag rule replaced with posting-only rule (`posts_directly = true`). The leaf-only rule made it impossible to flag parent accounts that post directly in QuickBooks (e.g., "Revenue – Tuition" containing a "Tuition Discounts" subtree), producing incorrect Ed Program Dollars math. See Migration 005 and Section 4.11 (Deprecated rules). Budget refactor pushed to Migration 006; subsequent migrations renumbered. Appendix D added for known tactical gaps.
+- **v1.3** — April 27, 2026 — Migration 006: default privileges set on public schema. GRANT discipline resolved systemically. Appendix D entry updated from open issue to resolved. Budget refactor renumbered to Migration 007; subsequent migrations renumbered accordingly.
 
 ---
 
