@@ -2,6 +2,14 @@
 
 Governance and operations platform for Libertas Academy, a classical Christian TK–12 school (~120 students, ~$1.09M budget).
 
+## Project ownership and naming
+
+- **Praesidium Foundation, Inc.** owns this product (IP, infra, brand). Repo: `praesidium-foundation/agora` (public, no LICENSE yet).
+- **Agora by Praesidium** is the platform/product brand. **Libertas Agora** is the instance branded for Libertas Academy (founding customer, perpetual free instance). Future schools follow the pattern (e.g., "Veritas Agora").
+- **Multi-tenant in spirit, single-tenant in implementation.** Do NOT add `org_id` columns or per-school `school_brand_settings` — those migrations are deferred until a second school onboards.
+- **User-facing UI strings stay "Libertas Agora"** (headers, login, dashboard). Use "Agora by Praesidium" or "Agora" only in commit messages, README, LICENSE, and other meta-content. Do not rename `package.json` name or other internal identifiers from the old `libertas-agora` slug without explicit instruction.
+- **Live URL:** `agora-praesidium.vercel.app` (will eventually move to subdomains on `agoraweb.app`, e.g., `libertas.agoraweb.app`). Local working folder is `agora`; remote origin is `praesidium-foundation/agora`.
+
 ## Tech Stack
 - Vite + React 19 (JavaScript)
 - Tailwind CSS v3
@@ -35,6 +43,22 @@ All colors are exposed as Tailwind tokens (see `tailwind.config.js`).
 **Typography**
 - **Cinzel** (`font-display`) — page titles, card titles, section labels, metric values. Regular weight (400) only — **never bold**.
 - **EB Garamond** (`font-body`) — body text, table cells, form labels, descriptions. Georgia fallback.
+
+## Database & migration conventions
+
+**GRANT discipline.** Every migration that creates a new table must end with:
+
+```sql
+grant select, insert, update, delete on <table_name> to authenticated;
+```
+
+Postgres GRANTs do not apply retroactively to tables created after a global grant. Migration 001's `grant ... on all tables in schema public to authenticated` covers only the tables existing at that moment. Without an explicit per-table grant, RLS-protected tables fail with "permission denied for table" *before* policies are evaluated — the failure looks like an RLS bug but isn't. Codified in `agora_architecture.md` Appendix D. Future task: a single `alter default privileges` migration could resolve this systemically.
+
+Same rule applies to functions: explicit `grant execute on function <name>(...) to authenticated;` per new function.
+
+## Architecture reference
+
+The file `agora_architecture.md` at the project root is the **canonical architecture reference** for Agora by Praesidium — schema patterns, module relationships, permission model, design standards, AYE lifecycle, and build sequencing. Read it before any non-trivial schema or feature work. Where conflicts arise between this doc, build prompts, or earlier conversation snippets, the architecture doc wins. Appendix B lists implemented and planned migrations; keep it current.
 
 ## Design system reference
 

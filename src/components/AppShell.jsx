@@ -7,8 +7,9 @@ import AYEBadge from './AYEBadge'
 // Sidebar configuration. `enabled: false` items render greyed out and
 // are not clickable. `lockKey` ties an item to a module code so the
 // lock indicator can light up when that module's instance is locked
-// for the current AYE. The first section has no label — Dashboard sits
-// at the top alone with extra spacing below.
+// for the current AYE. `subItems` makes an item expandable with nested
+// sub-routes; the parent itself is also navigable to its `to` path.
+// The first section has no label — Dashboard sits at the top alone.
 const NAV_SECTIONS = [
   {
     label: null,
@@ -50,21 +51,47 @@ const NAV_SECTIONS = [
     items: [
       { label: 'Academic Years',  to: '/admin/ayes', enabled: true },
       { label: 'Users & Access',  to: '#',           enabled: false },
-      { label: 'School Settings', to: '#',           enabled: false },
+      {
+        label: 'School Settings',
+        to: '/admin/settings',
+        enabled: true,
+        subItems: [
+          { label: 'Organization',         to: '/admin/settings/organization',         enabled: true },
+          { label: 'Brand',                to: '/admin/settings/brand',                enabled: true },
+          { label: 'Financial',            to: '/admin/settings/financial',            enabled: true },
+          { label: 'Module Configuration', to: '/admin/settings/module-configuration', enabled: true },
+        ],
+      },
     ],
   },
 ]
 
-function NavItem({ item, lockedCodes }) {
-  const { pathname } = useLocation()
-  const active = item.enabled && pathname === item.to
-  const locked = item.lockKey && lockedCodes.has(item.lockKey)
+const baseClasses =
+  'flex items-center gap-2.5 px-4 py-[7px] text-[13px] border-l-2 font-body'
 
+function NavRow({ item, depth = 0, active, locked, onClick, onChevronClick, expanded }) {
+  // Inner content shared by all nav-row variants. `depth` shifts left padding
+  // for sub-items.
   const inner = (
     <>
-      <span className="font-display text-[10px] text-gold min-w-[14px]">
-        {item.step ?? ''}
-      </span>
+      {item.subItems ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onChevronClick?.()
+          }}
+          className="w-4 text-gold/70 text-[10px] leading-none cursor-pointer"
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+      ) : (
+        <span className="font-display text-[10px] text-gold min-w-[14px]">
+          {item.step ?? ''}
+        </span>
+      )}
       <span className="flex-1 truncate">{item.label}</span>
       {locked && (
         <span className="text-gold/70 text-[10px] leading-none" aria-label="Locked">
@@ -74,14 +101,12 @@ function NavItem({ item, lockedCodes }) {
     </>
   )
 
-  const baseClasses =
-    'flex items-center gap-2.5 px-4 py-[7px] text-[13px] border-l-2 font-body'
+  // Indent depth shows sub-item nesting via extra left padding.
+  const indentStyle = depth > 0 ? { paddingLeft: `${16 + depth * 16}px` } : undefined
 
   if (!item.enabled) {
     return (
-      <div
-        className={`${baseClasses} border-transparent text-white/30 cursor-default select-none`}
-      >
+      <div className={`${baseClasses} border-transparent text-white/30 cursor-default select-none`} style={indentStyle}>
         {inner}
       </div>
     )
@@ -89,8 +114,11 @@ function NavItem({ item, lockedCodes }) {
 
   if (active) {
     return (
-      <div className={`${baseClasses} border-gold bg-gold/[0.10] text-white`}>
-        {inner}
+      <div className={`${baseClasses} border-gold bg-gold/[0.10] text-white`} style={indentStyle}>
+        {/* Wrap navigable parents in a Link even when active so the parent stays clickable */}
+        <Link to={item.to} className="contents" onClick={onClick}>
+          {inner}
+        </Link>
       </div>
     )
   }
@@ -98,10 +126,61 @@ function NavItem({ item, lockedCodes }) {
   return (
     <Link
       to={item.to}
+      onClick={onClick}
       className={`${baseClasses} border-transparent text-white/70 hover:text-white hover:bg-white/[0.04] transition-colors`}
+      style={indentStyle}
     >
       {inner}
     </Link>
+  )
+}
+
+function NavItem({ item, lockedCodes }) {
+  const { pathname } = useLocation()
+
+  // Auto-expand when current path is the parent or any of its descendants.
+  const matchesSubItem = item.subItems?.some(
+    (s) => pathname === s.to || pathname.startsWith(s.to + '/')
+  )
+  const matchesSelf = pathname === item.to
+  const initiallyExpanded = !!(matchesSubItem || matchesSelf)
+
+  const [expanded, setExpanded] = useState(initiallyExpanded)
+
+  // If the user navigates to a sub-route by other means, keep the section open.
+  useEffect(() => {
+    if (matchesSubItem || matchesSelf) setExpanded(true)
+  }, [matchesSubItem, matchesSelf])
+
+  const active = item.enabled && pathname === item.to
+  const locked = item.lockKey && lockedCodes.has(item.lockKey)
+
+  if (!item.subItems) {
+    return <NavRow item={item} active={active} locked={locked} />
+  }
+
+  return (
+    <>
+      <NavRow
+        item={item}
+        active={active}
+        locked={locked}
+        expanded={expanded}
+        onChevronClick={() => setExpanded((v) => !v)}
+      />
+      {expanded && item.subItems.map((sub) => {
+        const subActive = sub.enabled && pathname === sub.to
+        return (
+          <NavRow
+            key={sub.label}
+            item={sub}
+            depth={1}
+            active={subActive}
+            locked={false}
+          />
+        )
+      })}
+    </>
   )
 }
 
@@ -198,9 +277,6 @@ function AppShell({ children }) {
                   {section.label ? (
                     <SectionHeader>{section.label}</SectionHeader>
                   ) : (
-                    // Dashboard sits alone at top — render its items with
-                    // mt-1 baseline; the next section gets its own mt-[18px]
-                    // via SectionHeader's margin, providing the extra gap.
                     <div className="mt-1" />
                   )}
                   {section.items.map((item) => (

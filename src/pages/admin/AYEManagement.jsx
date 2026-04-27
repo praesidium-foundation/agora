@@ -6,23 +6,13 @@ import AppShell from '../../components/AppShell'
 import Card from '../../components/Card'
 import Badge from '../../components/Badge'
 import SectionLabel from '../../components/SectionLabel'
+import FieldLabel from '../../components/FieldLabel'
 
 const inputCls =
   'w-full bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none'
 
 const navyBtnCls =
   'inline-block bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed'
-
-function FieldLabel({ htmlFor, children }) {
-  return (
-    <label
-      htmlFor={htmlFor}
-      className="block font-body text-[11px] text-muted uppercase tracking-wider mb-1.5"
-    >
-      {children}
-    </label>
-  )
-}
 
 function AYEManagement() {
   const { session, profile } = useAuth()
