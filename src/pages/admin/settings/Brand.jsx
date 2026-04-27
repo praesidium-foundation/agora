@@ -1,9 +1,17 @@
 import AppShell from '../../../components/AppShell'
 import Card from '../../../components/Card'
+import Breadcrumb from '../../../components/Breadcrumb'
 
 function Brand() {
   return (
     <AppShell>
+      <Breadcrumb
+        items={[
+          { label: 'Admin' },
+          { label: 'Settings', to: '/admin/settings' },
+          { label: 'Brand' },
+        ]}
+      />
       <h1 className="font-display text-navy text-[28px] mb-1 leading-tight">
         Brand Settings
       </h1>

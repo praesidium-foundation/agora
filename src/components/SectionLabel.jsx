@@ -4,7 +4,7 @@
 function SectionLabel({ children, className = '' }) {
   return (
     <div className={`mb-3 ${className}`}>
-      <div className="font-display text-[18px] tracking-[0.10em] uppercase text-navy/55 mb-2">
+      <div className="font-display text-[18px] tracking-[0.10em] uppercase text-muted mb-2">
         {children}
       </div>
       <div className="border-t-[0.5px] border-gold/60" />

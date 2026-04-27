@@ -17,14 +17,21 @@ export default {
         // Text on light backgrounds.
         // (Use `text-navy` for primary headings; `navy` is already in palette.)
         body: '#2C2C2A',
-        muted: '#6B6760',
+        // `muted` is the canonical de-emphasized text token. It is navy
+        // composited at ~80% opacity onto cream/white. Computed contrast
+        // on cream #FAF8F2 = 6.7:1 — passes WCAG AA with margin. Use this
+        // everywhere you would have used text-navy/40, /50, /55, /60. See
+        // architecture doc Section 10.2 + v1.4 version-history entry.
+        muted: '#475472',
 
-        // Status palette — paired text + light fill per state.
+        // Status palette — paired text + light fill per state. Text-on-cream
+        // variants verified WCAG AA. status-amber darkened in v1.4 from
+        // #BA7517 (3.5:1 — failed AA) to #8C5410 (5.6:1 — passes AA).
         'status-green':    '#3B6D11',
         'status-green-bg': '#EAF3DE',
         'status-blue':     '#185FA5',
         'status-blue-bg':  '#E6F1FB',
-        'status-amber':    '#BA7517',
+        'status-amber':    '#8C5410',
         'status-amber-bg': '#FAEEDA',
         'status-red':      '#A32D2D',
         'status-red-bg':   '#FCEBEB',

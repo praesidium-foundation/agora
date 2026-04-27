@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import AppShell from '../../../components/AppShell'
+import Breadcrumb from '../../../components/Breadcrumb'
 
 const SETTINGS = [
   {
@@ -27,6 +28,7 @@ const SETTINGS = [
 function SettingsIndex() {
   return (
     <AppShell>
+      <Breadcrumb items={[{ label: 'Admin' }, { label: 'Settings' }]} />
       <h1 className="font-display text-navy text-[28px] mb-1 leading-tight">
         School Settings
       </h1>

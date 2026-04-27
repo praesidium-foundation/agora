@@ -44,6 +44,8 @@ All colors are exposed as Tailwind tokens (see `tailwind.config.js`).
 - **Cinzel** (`font-display`) — page titles, card titles, section labels, metric values. Regular weight (400) only — **never bold**.
 - **EB Garamond** (`font-body`) — body text, table cells, form labels, descriptions. Georgia fallback.
 
+**Muted text tokens.** Use `text-muted` (navy at AA-compliant opacity, computed as the solid color `#475472`) for all de-emphasized text on cream surfaces — page subtitles, helper text, `FieldLabel`, `SectionLabel`, table headers, breadcrumb crumbs. Do not use lower-opacity navy (`text-navy/40`, `/50`, `/55`, `/60`) for any text the user needs to read; it fails WCAG AA. Sidebar disabled items (modules not yet built) are an explicit exception and remain at `text-white/30` by design — they signal "not yet available" through their faintness. See architecture doc Section 10.2 for the contrast math and the v1.4 history note for the rationale.
+
 ## Database & migration conventions
 
 **GRANT discipline.** Migration 006 sets default privileges so any future table, sequence, or function created in `public` automatically grants the appropriate privileges to the `authenticated` role. RLS continues to gate row-level access. New migrations no longer need to issue per-table GRANTs. If a "permission denied for table X" error appears in any new migration, verify the migration is being run as `postgres` or `supabase_admin` (which is the case for all Supabase migrations); other creator roles would not inherit the default privileges.

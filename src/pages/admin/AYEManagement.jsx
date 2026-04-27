@@ -7,6 +7,7 @@ import Card from '../../components/Card'
 import Badge from '../../components/Badge'
 import SectionLabel from '../../components/SectionLabel'
 import FieldLabel from '../../components/FieldLabel'
+import Breadcrumb from '../../components/Breadcrumb'
 
 const inputCls =
   'w-full bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none'
@@ -94,6 +95,7 @@ function AYEManagement() {
   if (!profile?.is_system_admin) {
     return (
       <AppShell>
+        <Breadcrumb items={[{ label: 'Admin' }, { label: 'Academic Years' }]} />
         <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
           You don't have access to this page.
         </h1>
@@ -109,6 +111,7 @@ function AYEManagement() {
 
   return (
     <AppShell>
+      <Breadcrumb items={[{ label: 'Admin' }, { label: 'Academic Years' }]} />
       <h1 className="font-display text-navy text-[28px] mb-1 leading-tight">
         Academic Years
       </h1>

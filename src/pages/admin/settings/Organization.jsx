@@ -1,9 +1,17 @@
 import AppShell from '../../../components/AppShell'
 import Card from '../../../components/Card'
+import Breadcrumb from '../../../components/Breadcrumb'
 
 function Organization() {
   return (
     <AppShell>
+      <Breadcrumb
+        items={[
+          { label: 'Admin' },
+          { label: 'Settings', to: '/admin/settings' },
+          { label: 'Organization' },
+        ]}
+      />
       <h1 className="font-display text-navy text-[28px] mb-1 leading-tight">
         Organization Settings
       </h1>

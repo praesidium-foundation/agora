@@ -7,6 +7,7 @@ import AppShell from '../../components/AppShell'
 import Card from '../../components/Card'
 import Badge from '../../components/Badge'
 import SectionLabel from '../../components/SectionLabel'
+import Breadcrumb from '../../components/Breadcrumb'
 
 const usd = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -205,6 +206,7 @@ function TuitionWorksheet() {
   if (!allowed) {
     return (
       <AppShell>
+        <Breadcrumb items={[{ label: 'Budget' }, { label: 'Tuition' }]} />
         <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
           You don't have access to this module.
         </h1>
@@ -223,6 +225,7 @@ function TuitionWorksheet() {
 
   return (
     <AppShell>
+      <Breadcrumb items={[{ label: 'Budget' }, { label: 'Tuition' }]} />
       <h1 className="font-display text-navy text-[28px] mb-1 leading-tight">
         Tuition Worksheet
       </h1>

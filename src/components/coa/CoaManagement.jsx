@@ -71,7 +71,7 @@ function getDescendantIds(accountId, accounts) {
 
 function FlagPill({ label }) {
   return (
-    <span className="inline-block bg-cream-highlight text-navy/70 px-1.5 py-0.5 rounded text-[10px] tracking-wide">
+    <span className="inline-block bg-cream-highlight text-muted px-1.5 py-0.5 rounded text-[10px] tracking-wide">
       {label}
     </span>
   )
@@ -89,11 +89,15 @@ function FlagDisplay({ account }) {
   )
 }
 
+// "summary" tag rendered inline after a summary account's name in the tree,
+// preceded by a middot separator. Italic muted text reads as descriptive
+// metadata — kind, not status — so no colored badge.
 function SummaryIndicator() {
   return (
-    <span className="inline-block text-[10px] text-muted italic tracking-wide">
-      summary
-    </span>
+    <>
+      <span className="text-muted/60 text-[13px]" aria-hidden="true">·</span>
+      <span className="text-[12px] text-muted italic">summary</span>
+    </>
   )
 }
 
@@ -112,7 +116,7 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
         <button
           type="button"
           onClick={() => hasChildren && onToggle(node.id)}
-          className={`w-4 text-navy/50 ${!hasChildren ? 'invisible' : ''}`}
+          className={`w-4 text-muted ${!hasChildren ? 'invisible' : ''}`}
           aria-label={isOpen ? 'Collapse' : 'Expand'}
         >
           {isOpen ? '▾' : '▸'}
@@ -538,9 +542,17 @@ function AccountForm({ accounts, mode, account, initialParentId, onSubmit, onCan
               </span>
             </label>
           </div>
-          <p className="text-muted text-xs italic mt-1.5 leading-relaxed">
-            Posting accounts are where transactions actually post in QuickBooks (e.g., Tuition Discounts, individual donation accounts). Summary accounts are pure organizing categories whose value comes from rolling up their children. A posting account can still have children — its total is its direct posts plus its children's rollup.
-          </p>
+          <div className="text-muted text-xs italic mt-1.5 leading-relaxed space-y-1">
+            <p>
+              <strong className="font-medium not-italic">Posting</strong> — money posts here in QuickBooks (e.g., individual discount accounts, individual donation accounts).
+            </p>
+            <p>
+              <strong className="font-medium not-italic">Summary</strong> — pure rollup; value comes from children (e.g., "Tuition Discounts" as a header that sums its children).
+            </p>
+            <p>
+              A posting account can also have children — its rollup is its direct posts plus children's totals.
+            </p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

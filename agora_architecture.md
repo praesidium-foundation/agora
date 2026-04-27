@@ -1232,10 +1232,10 @@ These standards live in `CLAUDE.md` (for Claude Code enforcement) and in this do
 - **WCAG AA minimum** for body text on backgrounds (4.5:1 contrast ratio)
 - **WCAG AAA preferred** for primary content (7:1 ratio)
 - **Body text color** on cream `#FAF8F2`: `#2C2C2A` (passes AAA)
-- **Muted/caption text on cream**: `#6B6760` minimum (verify contrast)
+- **Muted text on cream uses navy at ~80% opacity, encoded as the solid token `muted` `#475472`** (computed contrast ratio **6.7:1**, passes AA with margin). Use `text-muted` for all de-emphasized text on cream/white surfaces — page subtitles, helper text, `FieldLabel`, `SectionLabel`, table headers, breadcrumb crumbs. There is **no `text-faint` token** as of v1.4 — anything that needs to be visible to users must clear AA.
 - **No body text on gold accent.** Gold is for accents, dividers, badges only.
-- **Dark surfaces** (navy header/sidebar): white text at 90%+ opacity for primary, never below 70%
-- **Status colors** (green/amber/red) must pass contrast on their backgrounds
+- **Dark surfaces** (navy header/sidebar): white text at 90%+ opacity for primary, never below 70%. Sidebar disabled-state items (modules not yet built) at `text-white/30` are an explicit exception — they communicate "not yet available" through their faintness.
+- **Status colors** verified WCAG AA on cream as of v1.4. `status-amber` darkened from `#BA7517` (3.5:1, failed) to `#8C5410` (5.6:1). Status badge variants use their own darker text shades (e.g., `#633806` for amber on `#FAEEDA`) — see `Badge.jsx` for the mapping.
 - **Cream-on-cream surfaces** are fine for visual grouping (intentional design choice). The issue is text contrast, not surface contrast.
 
 ### 10.3 Spacing
@@ -1522,6 +1522,7 @@ Version history:
 - **v1.1** — April 27, 2026 — Migration ordering corrected: Chart of Accounts now precedes Budget refactor (was reversed in v1.0). Appendix B updated to reflect Migration 003 (tuition target ratio fix) which was implemented but missing from the list. COA schema implemented as Migration 004; Budget refactor renumbered to 005; subsequent migrations renumbered accordingly.
 - **v1.2** — April 27, 2026 — Posting vs summary account model. Section 4 rewritten: leaf-only governance flag rule replaced with posting-only rule (`posts_directly = true`). The leaf-only rule made it impossible to flag parent accounts that post directly in QuickBooks (e.g., "Revenue – Tuition" containing a "Tuition Discounts" subtree), producing incorrect Ed Program Dollars math. See Migration 005 and Section 4.11 (Deprecated rules). Budget refactor pushed to Migration 006; subsequent migrations renumbered. Appendix D added for known tactical gaps.
 - **v1.3** — April 27, 2026 — Migration 006: default privileges set on public schema. GRANT discipline resolved systemically. Appendix D entry updated from open issue to resolved. Budget refactor renumbered to Migration 007; subsequent migrations renumbered accordingly.
+- **v1.4** — April 27, 2026 — UI corrections sweep: contrast tokens rationalized (`muted` redefined from warm gray `#6B6760` to navy-tinted `#475472` = navy at 80% opacity equivalent; `status-amber` darkened from `#BA7517` to `#8C5410` to pass WCAG AA on cream); back navigation `Breadcrumb` component added and wired into every content page; COA tree posting/summary visual distinction (italic "summary" tag with middot separator); Account Kind helper text tightened. No schema changes.
 
 ---
 
