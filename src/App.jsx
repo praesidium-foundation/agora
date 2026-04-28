@@ -9,6 +9,7 @@ import Brand from './pages/admin/settings/Brand'
 import Financial from './pages/admin/settings/Financial'
 import ModuleConfiguration from './pages/admin/settings/ModuleConfiguration'
 import TuitionWorksheet from './pages/modules/TuitionWorksheet'
+import PreliminaryBudget from './pages/modules/PreliminaryBudget'
 import ProtectedRoute from './lib/ProtectedRoute'
 
 function App() {
@@ -78,6 +79,14 @@ function App() {
           element={
             <ProtectedRoute>
               <TuitionWorksheet />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/modules/preliminary-budget"
+          element={
+            <ProtectedRoute>
+              <PreliminaryBudget />
             </ProtectedRoute>
           }
         />

@@ -47,7 +47,7 @@ const NAV_SECTIONS = [
       { step: 1, label: 'Enrollment',       to: '/modules/enrollment',          enabled: false, lockKey: 'enrollment_estimator' },
       { step: 2, label: 'Tuition',          to: '/modules/tuition',             enabled: true,  lockKey: 'tuition_worksheet' },
       { step: 3, label: 'Staffing',         to: '/modules/staffing',            enabled: false, lockKey: 'staffing' },
-      { step: 4, label: 'Prelim. Budget',   to: '/modules/preliminary-budget',  enabled: false, lockKey: 'preliminary_budget' },
+      { step: 4, label: 'Prelim. Budget',   to: '/modules/preliminary-budget',  enabled: true,  lockKey: 'preliminary_budget' },
       { step: 5, label: 'Enrollment Audit', to: '/modules/enrollment-audit',    enabled: false, lockKey: 'enrollment_audit' },
       { step: 6, label: 'Final Budget',     to: '/modules/final-budget',        enabled: false, lockKey: 'final_budget' },
     ],
