@@ -13,6 +13,11 @@ import {
   computeKpis,
   findUnbudgetedAccounts,
 } from '../../lib/budgetTree'
+import {
+  approveAndLockScenario,
+  rejectScenarioLock,
+  submitScenarioForLockReview,
+} from '../../lib/budgetLock'
 import AppShell from '../../components/AppShell'
 import AYESelector from '../../components/AYESelector'
 import Breadcrumb from '../../components/Breadcrumb'
@@ -26,6 +31,9 @@ import AddAccountModal from '../../components/budget/AddAccountModal'
 import ScenarioTabs from '../../components/budget/ScenarioTabs'
 import NewScenarioModal from '../../components/budget/NewScenarioModal'
 import ScenarioSettingsModal from '../../components/budget/ScenarioSettingsModal'
+import SubmitLockModal from '../../components/budget/SubmitLockModal'
+import ApproveLockBar from '../../components/budget/ApproveLockBar'
+import LockedBanner from '../../components/budget/LockedBanner'
 
 // Preliminary Budget — three-zone shell (header + KPI sidebar + detail).
 //
@@ -87,8 +95,10 @@ function HeaderZone({
   onScenarioAction,
   onResetClick,
   onAddAccountClick,
+  onSubmitLockClick,
   resetting,
   canEdit,
+  canSubmitLock,
   scenarioForActions,  // active scenario object, for state badge + reset gate
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -100,18 +110,30 @@ function HeaderZone({
     return () => window.removeEventListener('click', close)
   }, [menuOpen])
 
+  // Submit-for-lock-review enable rules:
+  //   - active scenario exists
+  //   - state is drafting (not already submitted / locked)
+  //   - is_recommended (architecture Section 3.4 universal Rule C)
+  //   - user has submit_lock permission
+  // Validation of cascade rules + non-zero lines happens inside the
+  // SubmitLockModal pre-flight; we don't pre-disable on those here so
+  // the user sees the modal's failure list and (if admin) the override
+  // option.
   const submitDisabled =
     !scenarioForActions ||
+    !canSubmitLock ||
     !scenarioForActions.is_recommended ||
     scenarioForActions.state !== 'drafting'
 
   const submitTooltip = !scenarioForActions
     ? 'No scenario selected'
-    : !scenarioForActions.is_recommended
-      ? 'Mark this scenario as recommended before submitting for lock review.'
-      : scenarioForActions.state !== 'drafting'
-        ? `Scenario state is ${scenarioForActions.state}; submit not available.`
-        : 'Lock workflow lands in the next commit.'
+    : !canSubmitLock
+      ? 'Submit for lock review requires submit_lock permission.'
+      : !scenarioForActions.is_recommended
+        ? 'Mark this scenario as recommended before submitting for lock review.'
+        : scenarioForActions.state !== 'drafting'
+          ? `Scenario is ${scenarioForActions.state}; submit not available in this state.`
+          : 'Submit for lock review.'
 
   return (
     <header className="sticky top-0 z-20 bg-cream pt-1 pb-3 -mt-1 border-b-[0.5px] border-card-border">
@@ -129,7 +151,9 @@ function HeaderZone({
           <AYESelector value={selectedAyeId} onChange={onAyeChange} />
 
           <div className="flex items-center gap-2">
-            {scenarioForActions && canEdit && (
+            {scenarioForActions &&
+             canEdit &&
+             scenarioForActions.state === 'drafting' && (
               <ActionButton label="+ Add Account" onClick={onAddAccountClick} />
             )}
             <ActionButton disabled label="Save" title="Auto-saves on edit; manual Save lands later" />
@@ -139,6 +163,7 @@ function HeaderZone({
               label="Submit for Lock Review"
               primary
               title={submitTooltip}
+              onClick={onSubmitLockClick}
             />
 
             {scenarioForActions && (
@@ -211,6 +236,18 @@ function PreliminaryBudget() {
     'preliminary_budget',
     'edit'
   )
+  const { allowed: canSubmitLock } = useModulePermission(
+    'preliminary_budget',
+    'submit_lock'
+  )
+  const { allowed: canApproveLock } = useModulePermission(
+    'preliminary_budget',
+    'approve_lock'
+  )
+  const { allowed: canPbAdmin } = useModulePermission(
+    'preliminary_budget',
+    'admin'
+  )
   const { allowed: canEditCoa } = useModulePermission(
     'chart_of_accounts',
     'edit'
@@ -239,6 +276,9 @@ function PreliminaryBudget() {
   const [newScenarioOpen, setNewScenarioOpen] = useState(false)
   const [settingsModal, setSettingsModal] = useState(null)
   // settingsModal shape: { scenarioId, field: 'label' | 'description' } | null
+
+  // Lock-workflow modal
+  const [submitLockOpen, setSubmitLockOpen] = useState(false)
 
   const [autoDetectDismissed, setAutoDetectDismissed] = useState(false)
   const [undoStack, setUndoStack] = useState([])
@@ -655,6 +695,60 @@ function PreliminaryBudget() {
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
 
+  // ---- lock workflow ---------------------------------------------------
+
+  // SubmitLockModal calls onConfirm with { lockedVia, overrideJustification }
+  // after pre-flight validation passes (or the user overrode). Persist
+  // the override metadata + flip state to pending_lock_review.
+  async function handleSubmitLockConfirm({ lockedVia, overrideJustification }) {
+    if (!activeScenario) return
+    await submitScenarioForLockReview({
+      scenarioId: activeScenario.id,
+      lockedVia,
+      overrideJustification,
+      userId: user?.id,
+    })
+    setSubmitLockOpen(false)
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
+  // Approve calls the SECURITY DEFINER RPC. The RPC validates the
+  // scenario state and is_recommended at the DB layer, computes KPIs,
+  // inserts the snapshot atomically, and flips state to locked.
+  async function handleApprove() {
+    if (!activeScenario) return
+    await approveAndLockScenario({ scenarioId: activeScenario.id })
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
+  async function handleReject() {
+    if (!activeScenario) return
+    await rejectScenarioLock({ scenarioId: activeScenario.id, userId: user?.id })
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
+  // Resolve a display name for the scenario's locked_by user. We don't
+  // store it on the scenario row; pull from user_profiles when the
+  // banner needs it. Cached locally per scenario id so re-renders
+  // don't re-fetch.
+  const [lockedByName, setLockedByName] = useState(null)
+  useEffect(() => {
+    if (!activeScenario?.locked_by) {
+      setLockedByName(null)
+      return
+    }
+    let mounted = true
+    ;(async () => {
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('full_name')
+        .eq('id', activeScenario.locked_by)
+        .maybeSingle()
+      if (mounted) setLockedByName(data?.full_name || null)
+    })()
+    return () => { mounted = false }
+  }, [activeScenario?.id, activeScenario?.locked_by])
+
   // ------- render branches ----------------------------------------------
 
   if (permLoading) {
@@ -706,8 +800,10 @@ function PreliminaryBudget() {
             onScenarioAction={handleScenarioAction}
             onResetClick={handleResetScenarioLines}
             onAddAccountClick={() => setAddAccountOpen(true)}
+            onSubmitLockClick={() => setSubmitLockOpen(true)}
             resetting={resetting}
             canEdit={canEdit && canEditCoa}
+            canSubmitLock={canSubmitLock || canPbAdmin}
             scenarioForActions={activeScenario}
           />
         </div>
@@ -810,7 +906,40 @@ function PreliminaryBudget() {
               />
             ) : (
               <>
-                {!autoDetectDismissed && unbudgeted.length > 0 && (
+                {/* State-aware header banners. Lock state takes precedence:
+                    - locked → LockedBanner (read-only with snapshot info)
+                    - pending_lock_review → ApproveLockBar for approvers,
+                      passive "pending" badge for everyone else (rendered
+                      inside ApproveLockBar's body)
+                    - drafting → AutoDetectBanner when missing accounts
+                                 exist and the user hasn't dismissed */}
+                {activeScenario.state === 'locked' && (
+                  <LockedBanner
+                    scenario={activeScenario}
+                    lockedByName={lockedByName}
+                  />
+                )}
+                {activeScenario.state === 'pending_lock_review' && canApproveLock && (
+                  <ApproveLockBar
+                    scenario={activeScenario}
+                    onApprove={handleApprove}
+                    onReject={handleReject}
+                  />
+                )}
+                {activeScenario.state === 'pending_lock_review' && !canApproveLock && (
+                  <div className="mb-4 px-4 py-3 bg-status-blue-bg border-[0.5px] border-status-blue/25 rounded text-status-blue text-sm">
+                    <p className="font-display text-[13px] tracking-[0.06em] uppercase mb-0.5">
+                      Pending lock review
+                    </p>
+                    <p className="text-body">
+                      Submitted; waiting for an approver. The detail view is
+                      read-only until approval or rejection.
+                    </p>
+                  </div>
+                )}
+                {activeScenario.state === 'drafting' &&
+                 !autoDetectDismissed &&
+                 unbudgeted.length > 0 && (
                   <AutoDetectBanner
                     missing={unbudgeted}
                     onAdd={handleAddUnbudgeted}
@@ -868,6 +997,17 @@ function PreliminaryBudget() {
           field={settingsModal.field}
           onClose={() => setSettingsModal(null)}
           onSave={handleSettingsSave}
+        />
+      )}
+
+      {submitLockOpen && activeScenario && (
+        <SubmitLockModal
+          scenario={activeScenario}
+          lines={lines}
+          ayeId={selectedAyeId}
+          isAdmin={!!canPbAdmin}
+          onCancel={() => setSubmitLockOpen(false)}
+          onConfirm={handleSubmitLockConfirm}
         />
       )}
     </AppShell>
