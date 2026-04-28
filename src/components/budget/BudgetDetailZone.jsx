@@ -198,7 +198,9 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
         )}
 
         {/* Amount cell. Posting accounts: clickable to edit (or editor
-            when active). Summary accounts: rollup total, read-only. */}
+            when active). Summary accounts: rollup total, read-only.
+            Editable cells render with an input-style outline so it's
+            obvious at a glance which fields the user can adjust. */}
         {isPosting ? (
           editingThisRow && !readOnly && !isLinked ? (
             <AmountEditor
@@ -210,18 +212,28 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
               onCancel={() => setEditing({ accountId: null })}
               onTab={handleTab}
             />
+          ) : readOnly || isLinked ? (
+            // Non-editable posting amount (locked scenario or auto-pulled
+            // upstream value): plain text, no input affordance.
+            <span
+              className={`text-right tabular-nums px-2 py-1 font-body text-[14px] w-32 flex-shrink-0 ${
+                amount < 0 ? 'text-status-red' : 'text-body'
+              }`}
+            >
+              {fmtUsd(amount)}
+            </span>
           ) : (
+            // Editable: render as a ghost input. Visible 0.5px border
+            // and white fill make the field-shape unmistakable; hover
+            // intensifies the border so the click target is obvious.
             <button
               type="button"
               onClick={handleClick}
-              disabled={readOnly || isLinked}
-              className={`text-right tabular-nums px-2 py-1 rounded font-body text-[14px] ${
+              className={`text-right tabular-nums px-2 py-1 rounded font-body text-[14px] w-32 flex-shrink-0 bg-white border-[0.5px] border-card-border cursor-text hover:border-navy/50 hover:bg-cream-highlight/40 transition-colors ${
                 amount < 0 ? 'text-status-red' : 'text-body'
-              } ${
-                readOnly || isLinked
-                  ? 'cursor-default'
-                  : 'cursor-text hover:bg-white'
-              } w-32 flex-shrink-0`}
+              }`}
+              aria-label={`Edit amount for ${node.name}`}
+              title="Click to edit"
             >
               {fmtUsd(amount)}
             </button>

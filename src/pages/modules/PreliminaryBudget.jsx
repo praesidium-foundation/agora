@@ -548,6 +548,7 @@ function PreliminaryBudget() {
                 <BudgetEmptyState
                   ayeId={selectedAyeId}
                   ayeLabel={aye?.label}
+                  onAyeChange={setSelectedAyeId}
                   onStartBlank={handleStartBlank}
                   onUploadCsv={() => setCsvOpen(true)}
                   onBootstrapPrior={handleBootstrapPrior}
