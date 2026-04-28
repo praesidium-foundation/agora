@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthProvider'
 import { useModulePermission } from '../../lib/usePermission'
+import { useToast } from '../../lib/Toast'
 import {
   createBlankScenario,
   createScenarioFromCsvRows,
@@ -220,6 +221,7 @@ function HeaderZone({
 function BudgetStage() {
   const { stageId } = useParams()
   const { user } = useAuth()
+  const toast = useToast()
   const { allowed: canView, loading: permLoading } = useModulePermission(
     'budget',
     'view'
@@ -253,11 +255,14 @@ function BudgetStage() {
   const [lines, setLines] = useState([])
 
   const [dataLoading, setDataLoading] = useState(false)
-  const [dataError, setDataError] = useState(null)
 
   const [creating, setCreating] = useState(false)
+  // Bootstrap-flow error stays inline INSIDE BudgetEmptyState (the
+  // empty-state card is the focal point during bootstrap). Other
+  // errors and all success / informational messages route through
+  // toast.error / toast.success — visible regardless of scroll
+  // position on the long-list budget detail.
   const [bootstrapError, setBootstrapError] = useState(null)
-  const [bootstrapNotice, setBootstrapNotice] = useState(null)
   const [csvOpen, setCsvOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
 
@@ -268,7 +273,6 @@ function BudgetStage() {
 
   const [autoDetectDismissed, setAutoDetectDismissed] = useState(false)
   const [undoStack, setUndoStack] = useState([])
-  const [toast, setToast] = useState(null)
 
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) || null,
@@ -312,9 +316,7 @@ function BudgetStage() {
   const loadAyeContext = useCallback(async (ayeId, preferredActiveId = null) => {
     if (!stageId) return
     setDataLoading(true)
-    setDataError(null)
     setBootstrapError(null)
-    setBootstrapNotice(null)
 
     const [ayeResult, scenariosResult, accountsResult] = await Promise.all([
       supabase
@@ -335,9 +337,9 @@ function BudgetStage() {
         .order('code', { ascending: true }),
     ])
 
-    if (ayeResult.error)       { setDataError(ayeResult.error.message);       setDataLoading(false); return }
-    if (scenariosResult.error) { setDataError(scenariosResult.error.message); setDataLoading(false); return }
-    if (accountsResult.error)  { setDataError(accountsResult.error.message);  setDataLoading(false); return }
+    if (ayeResult.error)       { toast.error(ayeResult.error.message);       setDataLoading(false); return }
+    if (scenariosResult.error) { toast.error(scenariosResult.error.message); setDataLoading(false); return }
+    if (accountsResult.error)  { toast.error(accountsResult.error.message);  setDataLoading(false); return }
 
     setAye(ayeResult.data)
     const list = scenariosResult.data || []
@@ -360,7 +362,7 @@ function BudgetStage() {
         .select('id, scenario_id, account_id, amount, source_type, notes')
         .eq('scenario_id', active)
       if (linesErr) {
-        setDataError(linesErr.message)
+        toast.error(linesErr.message)
         setDataLoading(false)
         return
       }
@@ -370,17 +372,16 @@ function BudgetStage() {
     }
 
     setDataLoading(false)
-  }, [activeScenarioId, stageId])
+  }, [activeScenarioId, stageId, toast])
 
   const loadLines = useCallback(async (scenarioId) => {
     setDataLoading(true)
-    setDataError(null)
     const { data, error } = await supabase
       .from('budget_stage_lines')
       .select('id, scenario_id, account_id, amount, source_type, notes')
       .eq('scenario_id', scenarioId)
     if (error) {
-      setDataError(error.message)
+      toast.error(error.message)
     } else {
       setLines(data || [])
     }
@@ -438,7 +439,6 @@ function BudgetStage() {
   async function handleStartBlank() {
     setCreating(true)
     setBootstrapError(null)
-    setBootstrapNotice(null)
     try {
       await createBlankScenario({
         ayeId: selectedAyeId,
@@ -456,7 +456,6 @@ function BudgetStage() {
   async function handleBootstrapPrior(probeResult) {
     setCreating(true)
     setBootstrapError(null)
-    setBootstrapNotice(null)
     try {
       const result = await createScenarioFromPriorAye({
         ayeId: selectedAyeId,
@@ -478,7 +477,7 @@ function BudgetStage() {
           `${result.skippedNames.length} account(s) from the prior budget are no longer in your Chart of Accounts and were skipped: ${list}${more}.`
         )
       }
-      setBootstrapNotice(noticeParts.join(' '))
+      toast.success(noticeParts.join(' '))
       await loadAyeContext(selectedAyeId, result.scenarioId)
     } catch (e) {
       setBootstrapError(e.message || String(e))
@@ -489,7 +488,6 @@ function BudgetStage() {
 
   async function handleCsvConfirm(rows) {
     setBootstrapError(null)
-    setBootstrapNotice(null)
     const result = await createScenarioFromCsvRows({
       ayeId: selectedAyeId,
       stageId,
@@ -509,7 +507,6 @@ function BudgetStage() {
       return
     }
     setResetting(true)
-    setDataError(null)
     try {
       const { error: linesErr } = await supabase
         .from('budget_stage_lines')
@@ -527,7 +524,7 @@ function BudgetStage() {
       setLines([])
       setUndoStack([])
     } catch (e) {
-      setDataError(e.message || String(e))
+      toast.error(e.message || String(e))
     } finally {
       setResetting(false)
     }
@@ -541,7 +538,7 @@ function BudgetStage() {
 
       const targetLine = lines.find((l) => l.account_id === accountId)
       if (!targetLine) {
-        setDataError(`No budget line found for account ${accountId}`)
+        toast.error(`No budget line found for account ${accountId}`)
         return
       }
 
@@ -562,7 +559,7 @@ function BudgetStage() {
             l.id === targetLine.id ? { ...l, amount: prevAmount } : l
           )
         )
-        setDataError(error.message)
+        toast.error(error.message)
         return
       }
 
@@ -606,13 +603,9 @@ function BudgetStage() {
   // ---- inline add account ----------------------------------------------
 
   async function handleAddAccountSuccess(message) {
-    setToast(message)
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(null), 5000)
+    toast.success(message)
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
-  const toastTimer = useRef(null)
-  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
   // ---- scenario tab actions --------------------------------------------
 
@@ -630,7 +623,6 @@ function BudgetStage() {
   }
 
   async function handleScenarioAction(scenarioId, action) {
-    setDataError(null)
     const target = scenarios.find((s) => s.id === scenarioId)
     if (!target) return
 
@@ -661,13 +653,13 @@ function BudgetStage() {
         if (setErr) throw setErr
         await loadAyeContext(selectedAyeId, activeScenarioId)
       } catch (e) {
-        setDataError(e.message || String(e))
+        toast.error(e.message || String(e))
       }
       return
     }
     if (action === 'delete') {
       if (target.state !== 'drafting') {
-        setDataError(
+        toast.error(
           `Cannot delete a scenario in state "${target.state}". Reopen it via the unlock workflow first.`
         )
         return
@@ -695,7 +687,7 @@ function BudgetStage() {
         setActiveScenarioId(nextActive)
         await loadAyeContext(selectedAyeId, nextActive)
       } catch (e) {
-        setDataError(e.message || String(e))
+        toast.error(e.message || String(e))
       }
       return
     }
@@ -857,29 +849,11 @@ function BudgetStage() {
               sidebar at the page's left edge produced visual collision
               when the KPIs lived on the left of the detail. */}
           <div className="flex-1 overflow-y-auto px-6 py-2">
-            {dataError && (
-              <p className="text-status-red text-sm mb-4" role="alert">
-                {dataError}
-              </p>
-            )}
-
-            {bootstrapNotice && (
-              <div
-                className="mb-4 px-3 py-2 bg-status-amber-bg border-[0.5px] border-status-amber/30 rounded text-status-amber text-sm"
-                role="status"
-              >
-                {bootstrapNotice}
-              </div>
-            )}
-
-            {toast && (
-              <div
-                className="mb-4 px-3 py-2 bg-status-green-bg border-[0.5px] border-status-green/30 rounded text-status-green text-sm"
-                role="status"
-              >
-                {toast}
-              </div>
-            )}
+            {/* Status messages (data-load errors, bootstrap notices,
+                add-account success) route through the global Toast
+                system at the top-right of the viewport — visible
+                regardless of how deep the user has scrolled into the
+                budget detail. */}
 
             {!selectedAyeId ? (
               <p className="text-muted italic mt-8">

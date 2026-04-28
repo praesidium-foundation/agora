@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthProvider'
+import { useToast } from '../../lib/Toast'
 import AppShell from '../../components/AppShell'
 import Card from '../../components/Card'
 import Badge from '../../components/Badge'
@@ -17,10 +18,10 @@ const navyBtnCls =
 
 function AYEManagement() {
   const { session, profile } = useAuth()
+  const toast = useToast()
 
   const [ayes, setAyes] = useState([])
   const [listLoading, setListLoading] = useState(true)
-  const [listError, setListError] = useState(null)
 
   const [showForm, setShowForm] = useState(false)
   const [label, setLabel] = useState('')
@@ -28,18 +29,19 @@ function AYEManagement() {
   const [endDate, setEndDate] = useState('')
   const [setCurrent, setSetCurrent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // Form-field validation error stays inline inside the form. Top-of-
+  // page status (success on create, list-load failures) routes via the
+  // global Toast system.
   const [formError, setFormError] = useState(null)
-  const [success, setSuccess] = useState(null)
 
   async function loadAyes() {
     setListLoading(true)
-    setListError(null)
     const { data, error } = await supabase
       .from('academic_years')
       .select('id, label, start_date, end_date, is_current, is_locked')
       .order('start_date', { ascending: false })
     if (error) {
-      setListError(error.message)
+      toast.error(`Could not load academic years: ${error.message}`)
     } else {
       setAyes(data || [])
     }
@@ -61,7 +63,6 @@ function AYEManagement() {
   async function handleSubmit(e) {
     e.preventDefault()
     setFormError(null)
-    setSuccess(null)
     setSubmitting(true)
 
     const { error: rpcError } = await supabase.rpc('bootstrap_aye', {
@@ -78,7 +79,7 @@ function AYEManagement() {
       return
     }
 
-    setSuccess(`Created ${label}.`)
+    toast.success(`Created ${label}.`)
     resetForm()
     setShowForm(false)
     loadAyes()
@@ -137,7 +138,6 @@ function AYEManagement() {
             type="button"
             onClick={() => {
               setShowForm(true)
-              setSuccess(null)
             }}
             className={navyBtnCls}
           >
@@ -219,17 +219,7 @@ function AYEManagement() {
         </section>
       )}
 
-      {success && (
-        <p className="text-status-green text-sm mb-6" role="status">
-          {success}
-        </p>
-      )}
-
-      {listError && (
-        <p className="text-status-red text-sm mb-6" role="alert">
-          Could not load AYEs: {listError}
-        </p>
-      )}
+      {/* Status messages route via global Toast (top-right of viewport). */}
 
       <section>
         <SectionLabel>Academic Years</SectionLabel>

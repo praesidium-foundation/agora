@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthProvider'
 import { useModulePermission } from '../../lib/usePermission'
+import { useToast } from '../../lib/Toast'
 import Card from '../Card'
 import Badge from '../Badge'
 import SectionLabel from '../SectionLabel'
@@ -310,39 +311,12 @@ function collectAllParentIds(nodes) {
   return ids
 }
 
-function TreeView({ tree, ...handlers }) {
-  const [expanded, setExpanded] = useState(() => new Set())
-  const [initialized, setInitialized] = useState(false)
-
-  // On first non-empty tree (per mount), expand every parent so the whole
-  // chart is visible. After that, user toggles control the state — adding a
-  // new account doesn't auto-re-expand things the user explicitly collapsed.
-  // Switching tabs or navigating away unmounts TreeView; coming back resets
-  // initialized so the tree reopens fully expanded.
-  useEffect(() => {
-    if (!initialized && tree.length > 0) {
-      setExpanded(collectAllParentIds(tree))
-      setInitialized(true)
-    }
-  }, [tree, initialized])
-
-  function toggle(id) {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
-
-  function expandAll() {
-    setExpanded(collectAllParentIds(tree))
-  }
-
-  function collapseAll() {
-    setExpanded(new Set())
-  }
-
+// Pure presentation component — `expanded` Set and the toggle/expandAll/
+// collapseAll callbacks are owned by CoaManagement so the Expand/Collapse
+// affordance can live in the sticky controls strip above the tree
+// (architecture Section 10's long-list-controls pattern). TreeView renders
+// the rows; the controls live with the rest of the section header.
+function TreeView({ tree, expanded, onToggle, ...handlers }) {
   if (tree.length === 0) {
     return (
       <Card>
@@ -354,32 +328,13 @@ function TreeView({ tree, ...handlers }) {
   }
 
   return (
-    <>
-      <div className="flex items-center justify-end mb-2 gap-3 text-[12px]">
-        <button
-          type="button"
-          onClick={expandAll}
-          className="text-status-blue hover:underline"
-        >
-          Expand all
-        </button>
-        <span className="text-muted/40">|</span>
-        <button
-          type="button"
-          onClick={collapseAll}
-          className="text-status-blue hover:underline"
-        >
-          Collapse all
-        </button>
+    <Card className="!p-0 overflow-hidden">
+      <div>
+        {tree.map((node) => (
+          <TreeNode key={node.id} node={node} depth={0} expanded={expanded} onToggle={onToggle} {...handlers} />
+        ))}
       </div>
-      <Card className="!p-0 overflow-hidden">
-        <div>
-          {tree.map((node) => (
-            <TreeNode key={node.id} node={node} depth={0} expanded={expanded} onToggle={toggle} {...handlers} />
-          ))}
-        </div>
-      </Card>
-    </>
+    </Card>
   )
 }
 
@@ -413,7 +368,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
     const active = sortBy === col
     return (
       <th
-        className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80 cursor-pointer select-none"
+        className="sticky top-[110px] z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80 cursor-pointer select-none"
         onClick={() => setSort(col)}
       >
         {label}
@@ -441,10 +396,10 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
             <SortableHeader col="name" label="Name" />
             <SortableHeader col="account_type" label="Type" />
             <SortableHeader col="posts_directly" label="Kind" />
-            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Subaccount of</th>
-            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Flags</th>
-            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Active</th>
-            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Actions</th>
+            <th className="sticky top-[110px] z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Subaccount of</th>
+            <th className="sticky top-[110px] z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Flags</th>
+            <th className="sticky top-[110px] z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Active</th>
+            <th className="sticky top-[110px] z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -521,6 +476,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
 
 function CoaManagement() {
   const { user } = useAuth()
+  const toast = useToast()
   const { allowed, loading: permLoading } = useModulePermission('chart_of_accounts', 'view')
   const { allowed: canEdit } = useModulePermission('chart_of_accounts', 'edit')
   const { allowed: canApprove } = useModulePermission('chart_of_accounts', 'approve_lock')
@@ -528,7 +484,6 @@ function CoaManagement() {
 
   const [accounts, setAccounts] = useState([])
   const [dataLoading, setDataLoading] = useState(true)
-  const [dataError, setDataError] = useState(null)
 
   const [view, setView] = useState('tree')
 
@@ -540,13 +495,14 @@ function CoaManagement() {
   const [formInitialParentId, setFormInitialParentId] = useState(null)
   const [formParentLocked, setFormParentLocked] = useState(false)
 
-  const [success, setSuccess] = useState(null)
-
   const [showImportExport, setShowImportExport] = useState(false)
 
   // Hard-delete confirmation state. deleteTarget is the account pending
   // confirmation; deleteVerifying covers the RPC safety check before the
   // dialog opens; deleting covers the actual DELETE call.
+  // The deleteError stays inline INSIDE the confirmation dialog (modal-
+  // local feedback, not a top-of-page status). Pre-flight failures from
+  // the can_hard_delete RPC route through toast.error() instead.
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleteVerifying, setDeleteVerifying] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -554,14 +510,13 @@ function CoaManagement() {
 
   async function loadAccounts() {
     setDataLoading(true)
-    setDataError(null)
     const { data, error } = await supabase
       .from('chart_of_accounts')
       .select('*')
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true })
     if (error) {
-      setDataError(translateError(error.message))
+      toast.error(translateError(error.message))
     } else {
       setAccounts(data || [])
     }
@@ -590,6 +545,30 @@ function CoaManagement() {
     return s
   }, [accounts])
 
+  // Expand/collapse state lives at the page level so the Expand all /
+  // Collapse all controls can sit in the sticky controls strip alongside
+  // the tabs, action buttons, and section header (architecture Section
+  // 10.10 long-list pattern). Tree is fully expanded on first non-empty
+  // load; user toggles take over from there.
+  const [expanded, setExpanded] = useState(() => new Set())
+  const [expandedInitialized, setExpandedInitialized] = useState(false)
+  useEffect(() => {
+    if (!expandedInitialized && tree.length > 0) {
+      setExpanded(collectAllParentIds(tree))
+      setExpandedInitialized(true)
+    }
+  }, [tree, expandedInitialized])
+  function toggleNode(id) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  function expandAll() { setExpanded(collectAllParentIds(tree)) }
+  function collapseAll() { setExpanded(new Set()) }
+
   // Top-level "+ Add Account" button passes no parentId and renders an
   // unlocked parent dropdown. Row-level "+ Subaccount" passes the row's
   // id and locks the parent (the user picked a row deliberately).
@@ -598,7 +577,6 @@ function CoaManagement() {
     setFormAccount(null)
     setFormInitialParentId(parentId)
     setFormParentLocked(parentId !== null)
-    setSuccess(null)
   }
 
   function openEdit(account) {
@@ -606,7 +584,6 @@ function CoaManagement() {
     setFormAccount(account)
     setFormInitialParentId(null)
     setFormParentLocked(false)
-    setSuccess(null)
   }
 
   function closeForm() {
@@ -620,7 +597,7 @@ function CoaManagement() {
   // the submitting state and error display; we just close it, surface
   // the toast, and reload the tree.
   function handleFormSuccess(savedAccount, mode) {
-    setSuccess(
+    toast.success(
       mode === 'add'
         ? `Added ${savedAccount.name}.`
         : `Updated ${savedAccount.name}.`
@@ -635,33 +612,29 @@ function CoaManagement() {
     )
     if (!ok) return
 
-    setSuccess(null)
-    setDataError(null)
     const { error } = await supabase
       .from('chart_of_accounts')
       .update({ is_active: false, updated_by: user?.id })
       .eq('id', account.id)
 
     if (error) {
-      setDataError(translateError(error.message))
+      toast.error(translateError(error.message))
     } else {
-      setSuccess(`Deactivated ${account.name}.`)
+      toast.success(`Deactivated ${account.name}.`)
       loadAccounts()
     }
   }
 
   async function handleReactivate(account) {
-    setSuccess(null)
-    setDataError(null)
     const { error } = await supabase
       .from('chart_of_accounts')
       .update({ is_active: true, updated_by: user?.id })
       .eq('id', account.id)
 
     if (error) {
-      setDataError(translateError(error.message))
+      toast.error(translateError(error.message))
     } else {
-      setSuccess(`Reactivated ${account.name}.`)
+      toast.success(`Reactivated ${account.name}.`)
       loadAccounts()
     }
   }
@@ -672,7 +645,6 @@ function CoaManagement() {
   // doesn't know about.
   async function handleHardDeleteClick(account) {
     setDeleteVerifying(true)
-    setDataError(null)
     setDeleteError(null)
 
     const { data, error } = await supabase.rpc(
@@ -683,14 +655,14 @@ function CoaManagement() {
     setDeleteVerifying(false)
 
     if (error) {
-      setDataError(translateError(error.message))
+      toast.error(translateError(error.message))
       return
     }
 
     // RPC returns a table — single row in this shape.
     const result = Array.isArray(data) ? data[0] : data
     if (!result?.can_delete) {
-      setDataError(
+      toast.error(
         result?.blocking_reason ||
           'This account cannot be hard-deleted. Try Deactivate instead.'
       )
@@ -713,11 +685,14 @@ function CoaManagement() {
     setDeleting(false)
 
     if (error) {
+      // Stay inside the dialog so the user sees the error in the
+      // context of the action they were about to confirm. Toast also
+      // fires for sticky visibility once they close.
       setDeleteError(translateError(error.message))
       return
     }
 
-    setSuccess(`Deleted ${deleteTarget.name}.`)
+    toast.success(`Deleted ${deleteTarget.name}.`)
     setDeleteTarget(null)
     loadAccounts()
   }
@@ -750,42 +725,74 @@ function CoaManagement() {
 
   return (
     <>
-      <SectionLabel>Chart of Accounts</SectionLabel>
+      {/* Sticky controls strip. The COA section's section label, tab
+          strip, action buttons, and Expand/Collapse controls all stay
+          pinned at the top of the scroll container so they remain
+          reachable from anywhere in a 100+ row tree. Cream background
+          + bottom border give clean visual separation from rows
+          scrolling underneath. (See architecture Section 10.10 for
+          the long-list-controls pattern.) */}
+      <div className="sticky top-0 z-30 -mx-6 px-6 bg-cream border-b-[0.5px] border-card-border pt-2 pb-3 mb-4">
+        <SectionLabel>Chart of Accounts</SectionLabel>
 
-      <div className="flex items-end justify-between mb-4 gap-4">
-        <div className="flex border-b-[0.5px] border-card-border">
-          <button
-            type="button"
-            onClick={() => setView('tree')}
-            className={`px-4 py-[7px] font-display text-[14px] tracking-[0.04em] cursor-pointer border-b-2 -mb-[0.5px] transition-colors ${view === 'tree' ? 'text-navy border-gold' : 'text-muted border-transparent hover:text-navy/80'}`}
-          >
-            Tree
-          </button>
-          <button
-            type="button"
-            onClick={() => setView('flat')}
-            className={`px-4 py-[7px] font-display text-[14px] tracking-[0.04em] cursor-pointer border-b-2 -mb-[0.5px] transition-colors ${view === 'flat' ? 'text-navy border-gold' : 'text-muted border-transparent hover:text-navy/80'}`}
-          >
-            Flat
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {!showImportExport && (
+        <div className="flex items-end justify-between gap-4">
+          <div className="flex border-b-[0.5px] border-card-border">
             <button
               type="button"
-              onClick={() => setShowImportExport(true)}
-              className="font-body text-sm text-status-blue hover:underline"
+              onClick={() => setView('tree')}
+              className={`px-4 py-[7px] font-display text-[14px] tracking-[0.04em] cursor-pointer border-b-2 -mb-[0.5px] transition-colors ${view === 'tree' ? 'text-navy border-gold' : 'text-muted border-transparent hover:text-navy/80'}`}
             >
-              Import / Export
+              Tree
             </button>
-          )}
-          {canEdit && (
-            <button type="button" onClick={() => openAdd()} className={navyBtnCls}>
-              + Add Account
+            <button
+              type="button"
+              onClick={() => setView('flat')}
+              className={`px-4 py-[7px] font-display text-[14px] tracking-[0.04em] cursor-pointer border-b-2 -mb-[0.5px] transition-colors ${view === 'flat' ? 'text-navy border-gold' : 'text-muted border-transparent hover:text-navy/80'}`}
+            >
+              Flat
             </button>
-          )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            {!showImportExport && (
+              <button
+                type="button"
+                onClick={() => setShowImportExport(true)}
+                className="font-body text-sm text-status-blue hover:underline"
+              >
+                Import / Export
+              </button>
+            )}
+            {canEdit && (
+              <button type="button" onClick={() => openAdd()} className={navyBtnCls}>
+                + Add Account
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Expand all / Collapse all controls live with the rest of the
+            sticky header in Tree view. Hidden in Flat view (no tree to
+            expand) and on the empty-tree state. */}
+        {view === 'tree' && tree.length > 0 && (
+          <div className="flex items-center justify-end mt-2 gap-3 text-[12px]">
+            <button
+              type="button"
+              onClick={expandAll}
+              className="text-status-blue hover:underline"
+            >
+              Expand all
+            </button>
+            <span className="text-muted/40">|</span>
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="text-status-blue hover:underline"
+            >
+              Collapse all
+            </button>
+          </div>
+        )}
       </div>
 
       {showImportExport && (
@@ -812,14 +819,19 @@ function CoaManagement() {
         />
       )}
 
-      {success && <p className="text-status-green text-sm mb-4" role="status">{success}</p>}
-      {dataError && <p className="text-status-red text-sm mb-4" role="alert">{dataError}</p>}
+      {/* Status messages render via the global Toast system
+          (top-right of viewport) — see useToast above. Inline status
+          rendering at the top of the section is no longer used; on a
+          122-row tree the user is rarely scrolled to where it would
+          be visible anyway. */}
 
       {dataLoading ? (
         <p className="text-muted">Loading accounts…</p>
       ) : view === 'tree' ? (
         <TreeView
           tree={tree}
+          expanded={expanded}
+          onToggle={toggleNode}
           onAdd={openAdd}
           onEdit={openEdit}
           onDeactivate={handleDeactivate}

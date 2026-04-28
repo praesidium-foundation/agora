@@ -256,6 +256,10 @@ grant select, insert, update, delete on module_workflows       to authenticated;
 grant select, insert, update, delete on module_workflow_stages to authenticated;
 grant select                         on stage_type_definitions to authenticated;
 
+-- PostgREST schema cache reload — added retroactively (Migration 013 era).
+-- See architecture doc Appendix B for the discipline note.
+notify pgrst, 'reload schema';
+
 -- ============================================================================
 -- END OF MIGRATION 010
 -- ============================================================================
