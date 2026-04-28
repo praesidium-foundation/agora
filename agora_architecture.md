@@ -223,6 +223,8 @@ ADMIN
 
 **Override**: Per Section 2.3, System Admins can override lock cascade rules with required justification.
 
+**Granularity**: Cascade rules in `school_lock_cascade_rules` reference module codes, not stage IDs (Section 3.7). The whole Budget module shares one set of upstream requirements; per-stage variations (e.g., "Final Budget requires a locked Preliminary Budget but not a locked Tuition Worksheet") are not yet in scope. When that becomes a real need, the table grows a nullable `stage_type` column with rules optionally scoped to a stage type, and the validator joins on that.
+
 ### 3.5 Cross-module data flow
 
 Data flows downstream only:
@@ -240,6 +242,44 @@ Budget is read-only for upstream-fed values. To change them, edit the upstream s
 ### 3.6 Custom KPI registry per school
 
 In addition to universal KPIs, each school can define custom KPIs in `school_custom_kpis`. These appear in dashboards, comparison views, and target-setting alongside standard KPIs. Formula stored as text now; structured formula support is future work.
+
+### 3.7 Module workflows and stages
+
+Modules with cycle-based work (Budget today; Strategic Plan and Accreditation when they ship) support **configurable workflows**. Each module gets one workflow per school; each workflow has ordered **stages**; each stage can be locked and snapshotted independently.
+
+**Hybrid taxonomy.** Stage labels are school-specific, but each stage carries a **stage type** drawn from a curated catalog. The catalog (`stage_type_definitions`) is curated by Praesidium — schools cannot add types — and ships with `working`, `preliminary`, `adopted`, `reforecast`, and `final`. Each type carries a `semantic_category` (`draft` / `approved` / `revision` / `closing`) and an `is_terminal` flag, which lets Agora reason about stages for KPI capture, reporting, and cascade rules without having to inspect free-form display names.
+
+**Why hybrid.** A "Final Budget" at one school means the same thing as an "Adopted Budget" at another and a "FY27 Closing Budget" at a third — the school's chosen vocabulary differs. Free-form labels alone leave Agora unable to identify the right scenario for cross-module joins ("which budget did we lock for this AYE?"). Pure typing alone strips the school's vocabulary and forces every UI string into Praesidium-speak. Display-name × type covers both: the user sees their words, Agora sees the type.
+
+**Schema** (Migration 010):
+
+```
+stage_type_definitions
+  code                 text primary key   -- 'preliminary' | 'final' | …
+  display_name         text
+  description          text
+  semantic_category    text               -- 'draft' | 'approved' | 'revision' | 'closing'
+  is_terminal          boolean            -- e.g. 'final' is terminal; 'reforecast' is not
+  sort_order           int
+
+module_workflows
+  id, module_id, name, description,
+  is_active boolean,
+  audit fields
+  -- one active workflow per module per school
+
+module_workflow_stages
+  id, workflow_id, stage_type (FK to stage_type_definitions.code),
+  display_name, short_name, description,
+  sort_order, target_month, audit fields
+  -- unique (workflow_id, display_name) and unique (workflow_id, sort_order)
+```
+
+**Helper.** `get_module_workflow_stages(module_code)` returns the active workflow's stages in sort order with `is_terminal` joined in. Used by the sidebar (to render budget stage items dynamically) and by the page (to load stage metadata from `:stageId` in the URL).
+
+**Libertas's seed.** Two stages on the Budget workflow: Preliminary Budget (type `preliminary`, target April) and Final Budget (type `final`, target October). When a school onboards, their workflow is seeded explicitly; the Settings UI for editing workflows is queued for Phase R2.
+
+**Cross-module references.** Downstream modules that need "the locked budget for this AYE" should match by stage type, not by display name — e.g., "the most recent locked snapshot whose `stage_type_at_lock` is terminal." This keeps integration code independent of the school's chosen labels.
 
 ---
 
@@ -470,21 +510,31 @@ Three cross-cutting concerns designed once and applied everywhere.
 ```
 budget_snapshots
   ...standard snapshot fields...
-  
+
+  -- Stage capture (per Section 3.7): each snapshot belongs to a
+  -- workflow stage; stage labels are captured by value at lock time
+  -- so post-lock workflow renames don't disturb history.
+  stage_id                       uuid          -- FK to module_workflow_stages
+  stage_display_name_at_lock     text          -- e.g. "Preliminary Budget"
+  stage_short_name_at_lock       text          -- e.g. "Prelim. Budget"
+  stage_type_at_lock             text          -- e.g. "preliminary" / "final"
+
   -- Captured upstream module references at lock time:
-  tuition_scenario_snapshot_id uuid
-  staffing_scenario_snapshot_id uuid (NULL if Staffing was in projection state at Preliminary lock)
+  tuition_scenario_snapshot_id   uuid
+  staffing_scenario_snapshot_id  uuid (NULL if Staffing was in projection state at lock)
   enrollment_estimate_snapshot_id uuid
   strategic_financial_plan_snapshot_id uuid
-  
-  -- For Preliminary Budget locked while Staffing was unlocked:
-  staffing_state_at_lock enum ('locked', 'projected')
-  
+
+  -- For an early-cycle budget stage locked while Staffing was unlocked:
+  staffing_state_at_lock         text          -- 'locked' | 'projected'
+
   -- Captured KPIs at lock time:
   kpi_total_income, kpi_total_expenses, kpi_net_income, etc.
 ```
 
-When Preliminary Budget is locked with Staffing in projection state, the snapshot records that fact. Board members viewing the snapshot see "Personnel: $852,759 (based on projected Staffing as of April 15, 2026; final Staffing locked September 1)."
+When a budget stage is locked with Staffing in projection state, the snapshot records that fact. Board members viewing the snapshot see "Personnel: $852,759 (based on projected Staffing as of April 15, 2026; final Staffing locked September 1)."
+
+**Stage capture rationale.** Recording `stage_id` alone would leave the snapshot dependent on the workflow editor — if a school renames or deletes a stage in Phase R2, historical snapshots would render with the new label or break entirely. Capturing the stage's display name, short name, and type by value makes each snapshot self-describing: it remembers what stage it represented at the moment it was locked, regardless of subsequent workflow edits.
 
 ### 5.2 Redaction
 
@@ -948,13 +998,16 @@ Praesidium configures mappings during school onboarding. Schools can see and ver
 
 The most-used screen. Holly's primary workspace.
 
+The Budget module is **one module with configurable workflow stages** (per Section 3.7). Libertas's workflow has two stages — Preliminary Budget and Final Budget — but every school's workflow can differ. The page, the URL, and the data model are all stage-aware: one page (`/modules/budget/:stageId`) renders any stage of any school's workflow. Internal references throughout this document use stage-agnostic language; "Preliminary Budget" and "Final Budget" appear only as Libertas-specific examples.
+
 ### 8.1 Visual layout — three zones
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │  HEADER ZONE (sticky)                                │
-│  AYE 2027 Preliminary Budget • DRAFTING              │
+│  AYE 2027 [stage display name] • DRAFTING            │
 │  [Save] [View PDF] [Submit] [Compare ▾]              │
+│  [Scenario tabs ★] [+ New scenario]                  │
 └─────────────────────────────────────────────────────┘
 ┌────────────────┬────────────────────────────────────┐
 │  KPI SIDEBAR   │  BUDGET DETAIL ZONE                │
@@ -1018,7 +1071,7 @@ Projected Cash Flow Ending Balance — pulled from cash flow forecast
 
 Comparison annotations: each KPI shows current value + target/comparison. "Ed Program Ratio: 0.716 (target: 1.02) ⚠️". Comparisons pulled from:
 - Strategic Financial Plan targets for the AYE
-- Prior year's locked Final Budget
+- The most recent locked snapshot for the prior AYE whose `stage_type_at_lock` is terminal (e.g., the prior AYE's locked Final Budget for Libertas)
 - Prior year's actuals (when QB integration exists)
 
 ### 8.5 Strategic KPI Dashboard (separate view)
@@ -1051,45 +1104,57 @@ Significant variances flagged (default >5% or >$10k; configurable per school).
 
 **Variance Report view** is a priority output (recent pain point at Libertas). Side-by-side comparison of two snapshots or snapshot vs. actuals, with variance columns.
 
-### 8.7 Multiple Budget scenarios per AYE
+### 8.7 Multiple Budget scenarios per (AYE, Stage)
 
-Real use case: HoS presents board with "with HS" vs. "without HS" budget options. Schema supports this via parallel scenarios (like Tuition and Staffing).
+Real use case: HoS presents board with "with HS" vs. "without HS" budget options. Schema supports this via parallel scenarios scoped to **(AYE, Stage)** — every stage of the workflow gets its own scenario set, and within a stage multiple scenarios can coexist.
 
 ```
-preliminary_budget_scenarios    (parallel structure to other modules)
-  id, aye_id, scenario_label, description, is_recommended
-  state enum
+budget_stage_scenarios       (one set per (aye_id, stage_id))
+  id, aye_id, stage_id, scenario_label, description, is_recommended
+  state ('drafting' | 'pending_lock_review' | 'locked' | 'pending_unlock_review')
   narrative text (optional — see Section 8.8)
   show_narrative_in_pdf boolean (default true if narrative present)
-  audit fields
+  locked_at, locked_by, locked_via, override_justification, audit fields
 
-preliminary_budget_lines
+budget_stage_lines
   id, scenario_id (FK), account_id, amount, source_type, source_ref_id, etc.
 
-final_budget_scenarios + final_budget_lines    (same pattern)
+budget_snapshots               (shared across stages; stage_id distinguishes)
+  ...standard snapshot fields...
+  stage_id (FK), stage_display_name_at_lock, stage_short_name_at_lock,
+  stage_type_at_lock           -- captured by value (Section 5.1)
+
+budget_snapshot_lines           (FK to budget_snapshots)
+  account state captured by value: code, name, hierarchy_path, flags
 ```
 
-ONE scenario marked `is_recommended` at lock time → becomes the official locked snapshot. Other scenarios remain queryable for "what-if" review.
+ONE scenario marked `is_recommended` at lock time → becomes the official locked snapshot for that (AYE, Stage). Other scenarios remain queryable for "what-if" review. The partial unique index `budget_stage_scenarios_one_locked_recommended` enforces that two stages of the same AYE can each have their own locked recommended scenario.
 
-### 8.8 Narrative space (Preliminary Budget only)
+### 8.8 Narrative space
 
-Optional narrative field on each Preliminary Budget scenario. HoS or Treasurer's contextual notes about priorities, cuts, decisions. Renders in Operating Budget Detail PDF when present. NOT in Budget Summary (community-facing). Optional — leave blank, hidden in UI.
+Optional narrative field on every budget scenario. HoS or Treasurer's contextual notes about priorities, cuts, decisions. Renders in Operating Budget Detail PDF when present. NOT in Budget Summary (community-facing). Optional — leave blank, hidden in UI.
+
+In practice the narrative is most useful on early-cycle stages (e.g., Libertas's Preliminary Budget, where context for revisions matters); terminal stages (Final, Adopted) often inherit the prior stage's narrative or omit it. The schema allows narratives on any stage; stage-specific defaults can be added in the Phase R2 workflow editor.
 
 ### 8.9 Lock workflow
 
-**Submit-time validation**:
-- Recommended Tuition scenario must be locked → error or override
-- Recommended Enrollment Estimate must be locked → error or override
-- For Preliminary Budget: Staffing can be in any state (allowed projection state)
-- For Final Budget: Recommended Staffing scenario must be locked → error or override
+The lock workflow is **stage-agnostic** — every stage of every workflow uses the same submit / approve / reject transitions and atomic snapshot capture. Permission gates (`submit_lock`, `approve_lock`) are module-level, not stage-level.
+
+**Submit-time validation** runs against `school_lock_cascade_rules` for `module_being_locked = 'budget'` plus generic in-memory checks:
+- Active scenario must be marked `is_recommended` → error
+- At least one budget line must have a non-zero amount → error
+- Cascade rules for the budget module must be satisfied → error or override
 - Strategic Financial Plan adopted (covers this AYE) → warning only, not blocking
-- Recommended scenario must exist (`is_recommended = true` on exactly one scenario)
 
-If override used: justification text required, recorded in `override_justification`.
+For Libertas's seeded rules: tuition_worksheet locked AND enrollment_estimator locked. Staffing is the documented Section 3.4 exception (allowed projection state at any non-terminal stage); the cascade rules table reflects that by simply not requiring it. When per-stage cascade variations become a real need (e.g., "Final Budget specifically requires locked Staffing while Preliminary is fine with projected"), see Section 3.4's "Granularity" note for the schema extension.
 
-**Approval step**: Submit → `pending_lock_review` → Treasurer (or designated approver) reviews → Approve → `locked` → snapshot atomically captured.
+If override used: justification text required, recorded in `override_justification` on the scenario row and carried into the snapshot at lock time.
 
-**Re-lock workflow**: Locked Preliminary → work on Final → submit → approve → state becomes `final_locked` → new snapshot captured. Preliminary snapshot stays archived.
+**Approval step**: Submit → `pending_lock_review` → designated approver reviews → Approve → atomic call to `lock_budget_stage_scenario(scenario_id, locked_via, override_justification)` (Migration 012) → state flips to `locked` and the snapshot lands in the same transaction.
+
+**Stage progression**: Locking one stage doesn't auto-advance to the next. The user moves between stages via the sidebar; each stage carries its own scenario set and lock lifecycle. A locked Stage 1 (e.g., Preliminary Budget) is the snapshot a downstream Stage 2 (e.g., Final Budget) can compare against.
+
+**Re-lock**: A scenario locked in error needs the unlock workflow (`pending_unlock_review` → `drafting`), which is queued for a later session. Until then, locked scenarios stay locked; the user creates a new scenario in the same stage if changes are needed.
 
 ### 8.10 Operating tool layer (future)
 
@@ -1264,6 +1329,20 @@ First sidebar item. Landing page that orients to current state.
 
 Refined when more modules exist.
 
+### 9.7 Annual Rhythm Configuration
+
+Per-school configuration for the cadence of the school year. Today this section is small — just lock cascade rules — but it's the natural home for forward-looking configuration as more rhythm-aware features land (lock-policy windows, fiscal calendar overrides, target-month nudges, etc.).
+
+**Schema today** (Migrations 008 + 010):
+
+- `school_lock_cascade_rules` — per-school list of "to lock module X, module Y must be in state S" rules. Text-keyed by module code so rules can forward-reference modules that haven't shipped yet; validated at INSERT/UPDATE time once both modules exist. Covered in detail in Section 3.4.
+- `module_workflows` and `module_workflow_stages` — per-module workflow configuration backing the stage system. Covered in Section 3.7.
+- `stage_type_definitions` — Praesidium-curated catalog of stage types. Read-only from the app.
+
+**Settings UI**: queued for Phase R2. Until then, workflows are seeded per-school via migration; cascade rules are seeded per-school via migration. Editing requires system admin access via SQL.
+
+**Cascade rules are per-module, not per-stage** — see Section 3.4's "Granularity" note. When per-stage rules become a real need, the schema extends with a nullable `stage_type` column on cascade rules and the validator joins on it.
+
 ---
 
 ## 10. Design Standards (Codified)
@@ -1434,12 +1513,17 @@ A separate Build Sequence document will detail this. Summary here:
 - Users & Access UI (permission-level + detail-visibility flags)
 
 ### Phase 2: Budget Shell
-- Preliminary Budget UI with manual entry, hierarchical display
+- Stage-aware Budget UI (configurable workflow per Section 3.7) with manual entry, hierarchical display
 - KPI sidebar (real-time computation)
-- Snapshot capture on lock
+- Snapshot capture on lock — `stage_id` + stage labels captured by value (Section 5.1)
 - Operating Budget Detail PDF generation
-- Lock workflow (submit → approve → locked)
+- Lock workflow (submit → approve → locked) via `lock_budget_stage_scenario` (Migration 012); same workflow for every stage of every school's configuration
 - Audit log per-record history view
+
+### Phase R2: Workflow Configuration UI (queued)
+- Settings sub-page for editing `module_workflows` and `module_workflow_stages` (system admin only initially; later gated on a dedicated `workflow_config` permission)
+- Constraints enforced at save time: at least one terminal stage; stage labels unique per workflow; sort orders unique per workflow
+- Stage deletion guarded against existing locked snapshots (snapshot tables FK → `module_workflow_stages` is RESTRICT today; the editor surfaces "this stage has N locked snapshots — rename instead of delete")
 
 ### Phase 3: Staffing Module
 - Multi-scenario UI
@@ -1540,17 +1624,19 @@ Each phase delivers usable value while building toward the full vision. Specific
 - **Migration 006**: Default privileges for `authenticated` role on `public` schema — `ALTER DEFAULT PRIVILEGES` for tables, sequences, and functions created by `postgres` and `supabase_admin`, plus a catch-up grant on existing objects. Resolves the GRANT discipline class of bug (Migration 004 hit this; 005 worked around it with a per-table grant). Future migrations no longer need explicit per-table grants.
 - **Migration 007**: Conditional hard delete on COA accounts — adds `chart_of_accounts_can_hard_delete(account_id)` function (returns `can_delete` + `blocking_reason`; today checks self-referential subaccount FK, body extends as Phase 2+ tables add FK references). Splits the COA write RLS policy from one `coa_write` (edit-gated) into three: `coa_insert` and `coa_update` (edit-gated; soft-delete still works at edit level), `coa_delete` (admin-gated). Hard-delete audit logging is automatic via the existing `coa_change_log` trigger.
 - **Migration 008**: Annual Rhythm Settings — `school_lock_cascade_rules` table makes the lock-cascade semantic from Section 3.4 per-school configurable (text codes for `module_being_locked` / `required_module`, validated against `modules.code` by trigger; `required_state` text + CHECK; `is_required` distinguishes hard rule from warning-only). Read-gated to authenticated; write-gated to system admin. Audit-logged via `tg_log_changes()`. `change_log_read` policy extended with public-read arm for cascade rules.
-- **Migration 009**: Preliminary Budget refactor — drops the legacy flat `preliminary_budget` and `final_budget` tables (Migration 001) and replaces Preliminary with the scenario + line model: `preliminary_budget_scenarios` (per-AYE multi-scenario header with state machine, narrative, lock metadata), `preliminary_budget_lines` (one row per scenario × COA-account, validated as posting + non-pass-thru via trigger; locked-scenario writes blocked). Adds `budget_snapshots` + `budget_snapshot_lines` (atomic capture at lock; UPDATE blocked by `tg_prevent_snapshot_update`; account state captured by value so snapshots survive post-lock COA changes). Helper `scenario_includes_account()`. Module/perm seeds; RLS gates (read=view, write=edit, snapshot insert=submit_lock); `change_log_read` extended for the four new tables. Seeds Libertas's cascade rules: Preliminary Budget requires Tuition Worksheet locked AND Enrollment Estimator locked. Extends `budget_source_type` enum with `linked_enrollment`. Final Budget tables deferred to a later migration.
-- **Migration 010**: Atomic lock for Preliminary Budget scenarios. Adds three SQL helpers: `coa_hierarchy_path(account_id)` returns colon-delimited path (captured by value into `budget_snapshot_lines.account_hierarchy_path` so snapshots stay correct after post-lock COA changes); `compute_pb_scenario_kpis(scenario_id)` mirrors the JS `computeKpis` logic so the captured KPIs match what the user saw in the sidebar at lock time; `lock_preliminary_budget_scenario(scenario_id, locked_via, override_justification)` is the SECURITY DEFINER entry point that atomically validates state + is_recommended, computes KPIs, inserts the snapshot header, inserts every snapshot line, and flips scenario state to `locked`. If any step fails, the transaction rolls back — the scenario can never be `locked` without a corresponding snapshot. Submit and Reject transitions remain client-side UPDATEs gated by RLS edit-perm; the per-column trust gap is documented in Appendix D.
+- **Migration 009**: Initial Preliminary Budget refactor — created the first cut of `preliminary_budget_scenarios` / `preliminary_budget_lines` / `budget_snapshots` / `budget_snapshot_lines` tables, dropped the legacy flat budget tables from Migration 001, seeded Libertas's cascade rules. Superseded by Migration 011 once the workflow + stage framework landed; the original tables created here exist only briefly in repo history.
+- **Migration 010**: Module workflows + stages framework. Adds `stage_type_definitions` (Praesidium-curated catalog: working / preliminary / adopted / reforecast / final), `module_workflows` (per-school active workflow per module — partial unique index enforces "one active per module"), and `module_workflow_stages` (school-named, type-tagged stages with sort_order and target_month). Helper `get_module_workflow_stages(module_code)` returns the active workflow's stages joined with the type catalog. RLS: anyone reads, system admin writes (Settings UI gating ships in Phase R2). Seeds Libertas's two-stage Budget workflow: Preliminary Budget (April) and Final Budget (October).
+- **Migration 011**: Budget tables refactored to reference workflow stages. Drops the original 009 tables (no production data — only Phase 2 Session 1 test data was disposable). Renames the module's `code` from `preliminary_budget` to `budget` (FKs use IDs so user_module_permissions / school_lock_cascade_rules text references are updated by hand). Recreates `budget_stage_scenarios` (scope: AYE × Stage), `budget_stage_lines`, `budget_snapshots` (with `stage_id` + captured stage label / short_name / type), `budget_snapshot_lines`. Validation triggers: posting + non-pass-thru on lines, locked-scenario-blocks-line-writes. Snapshot immutability triggers carry forward. RLS gates point at `current_user_has_module_perm('budget', ...)`. `change_log_read` policy refreshed with arms for the new tables.
+- **Migration 012**: Atomic stage-aware lock. `coa_hierarchy_path(account_id)` returns colon-delimited path captured by value into snapshots. `compute_budget_scenario_kpis(scenario_id)` returns the seven-KPI bundle matching the JS sidebar logic. `lock_budget_stage_scenario(scenario_id, locked_via, override_justification)` is the SECURITY DEFINER entry point that atomically: (1) validates approve_lock + scenario state + is_recommended, (2) reads stage metadata for capture, (3) computes KPIs, (4) inserts the snapshot header, (5) inserts every snapshot line with account state by value, (6) flips scenario state to `locked`. Single transaction — partial states impossible.
 
 ### Migrations needed (per this architecture)
 
-- **Migration 011**: Strategic Plan schemas (three instruments)
-- **Migration 012**: Snapshot tables for Tuition, Staffing, Enrollment (Budget snapshots shipped in 009)
-- **Migration 013**: Final Budget refactor — scenario + line model paired with Preliminary, sharing the `budget_snapshots` / `budget_snapshot_lines` tables via `snapshot_type = 'final'`
-- **Migration 014**: Board Composition + Committees
-- **Migration 015**: Org Acronyms registry, Custom KPI registry
-- **Migration 016**: Module-to-Account mappings
+- **Migration 013**: Strategic Plan schemas (three instruments)
+- **Migration 014**: Snapshot tables for Tuition, Staffing, Enrollment (Budget snapshots shipped in 011)
+- **Migration 015**: Board Composition + Committees
+- **Migration 016**: Org Acronyms registry, Custom KPI registry
+- **Migration 017**: Module-to-Account mappings
+- **Migration 018**: Workflow Configuration UI scaffolding (Phase R2) — depends on the Settings UI work; may add a dedicated `workflow_config` module-permission row
 - (Additional migrations as build phases progress)
 
 ---
@@ -1613,6 +1699,7 @@ Version history:
 - **v1.8** — April 27, 2026 — Sidebar: ACTUALS section added between BUDGET and ADMIN per Section 3.2 with two future-disabled sub-items (Advancement, Cash Flow). All five top-level categories (GOVERNANCE / OPERATIONS / BUDGET / ACTUALS / ADMIN) made collapsible — chevron + label both toggle, smooth `grid-template-rows` transition (200ms), state persisted in `localStorage` (`agora.sidebar.collapsedSections`). Auto-expand on route change so the section containing the active page is always visible in the sidebar. Dashboard remains a top-level link without a parent category. School Settings sub-item expand/collapse pattern (preserved from earlier work) operates independently of the top-level ADMIN toggle.
 - **v2.0** — April 27, 2026 — Conditional hard delete on COA accounts implemented (Migration 007). New Section 4.12 documents the soft-delete (Deactivate) vs hard-delete distinction. The DB function `chart_of_accounts_can_hard_delete(account_id)` returns both a boolean and a human-readable blocking reason; the UI hides the Delete button when the account isn't safe and surfaces the reason via a hover (i) icon next to Deactivate. RLS policy split: `coa_insert` and `coa_update` keep the edit-permission gate (so soft-delete still works at edit level), `coa_delete` requires `admin`. Hard-delete audit logging is automatic via the existing change_log trigger. Function body is structured to extend as Phase 2+ modules add FK references to `chart_of_accounts`.
 - **v2.1** — April 27, 2026 — COA management UI polish. Add / Edit / "+ Subaccount" interactions converted from inline expand to modal, mirroring Budget's "+ Add Account" pattern — same `AccountForm` React component opened in modal context. New Section 10.9 codifies the modal-not-inline-expand principle for row actions at scale. Tree-row layout restructured into fixed-width zones (metadata, type+status, actions) so the right edge stays aligned across 100+ rows; metadata zone surfaces the most informative governance flag with a "+N" + tooltip when multiple are set, instead of the prior inline pill stack. (i) info icon next to Deactivate recolored from muted-red to muted-navy with hover-to-navy treatment — informational, not destructive. AccountForm gained a `parentLocked` prop so the "+ Subaccount" entry path renders the parent as a read-only context line instead of an editable dropdown. No schema or business-logic changes.
+- **v2.2** — April 28, 2026 — Phase 2 architectural correction. Budget module generalized from a hardcoded two-stage assumption (Preliminary, Final) to support **configurable workflows and stages** (new Section 3.7). Hybrid stage-type taxonomy: schools name and order stages freely; each stage is typed from a Praesidium-curated catalog (`working` / `preliminary` / `adopted` / `reforecast` / `final`). Migrations 010 (workflow framework + Libertas seed), 011 (Budget tables refactored to reference stages, module renamed `preliminary_budget` → `budget`), and 012 (stage-aware atomic lock function) land the new model. Section 8 rewritten with stage-agnostic language; Section 5.1 documents stage capture in snapshots; Section 9.7 introduced as the Annual Rhythm Configuration home; Section 12 adds Phase R2 (Workflow Configuration UI) as queued work. UI refactor: page renamed `PreliminaryBudget.jsx` → `BudgetStage.jsx`, route changed to `/modules/budget/:stageId`, sidebar slots filled dynamically from `get_module_workflow_stages('budget')`. The previously-pushed Migration 010 (`lock_preliminary_budget_scenario`) was never applied to any production database; it is removed from the repo and replaced by Migration 012.
 
 ---
 

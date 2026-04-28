@@ -2,7 +2,7 @@
 //
 // Inputs:
 //   accounts — full COA fetch (every account, all flags). Filters happen here.
-//   lines    — every preliminary_budget_lines row for the active scenario.
+//   lines    — every budget_stage_lines row for the active scenario.
 //
 // Output: a tree shaped for Display Style A (Section 4.5):
 //

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 // Scenario tab bar rendered in the page header zone. One tab per
-// preliminary_budget_scenarios row for the active AYE, plus a final
+// budget_stage_scenarios row for the active (AYE, Stage), plus a final
 // "+ New scenario" tile.
 //
 // Each tab shows: scenario_label, optional ★ for is_recommended, and a

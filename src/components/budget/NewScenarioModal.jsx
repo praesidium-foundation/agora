@@ -13,21 +13,35 @@ import {
 // the active baseline.
 //
 // Props:
-//   ayeId            — uuid for the AYE the new scenario belongs to
-//   ayeLabel         — display label for the AYE
-//   currentScenario  — { id, scenario_label } | null
-//                      When non-null, "Copy from current" is offered.
-//   userId           — for created_by / updated_by audit
-//   onClose          — () => void
-//   onCreated(id)    — (newScenarioId) => void; parent re-fetches and
-//                      switches to the new tab.
+//   ayeId             — uuid for the AYE the new scenario belongs to
+//   stageId           — uuid for the workflow stage the new scenario
+//                        belongs to (each (AYE, Stage) has its own
+//                        scenario set)
+//   ayeLabel          — display label for the AYE
+//   stageDisplayName  — display label for the stage (e.g. "Preliminary
+//                        Budget"); used in the modal subtitle
+//   currentScenario   — { id, scenario_label } | null
+//                       When non-null, "Copy from current" is offered.
+//   userId            — for created_by / updated_by audit
+//   onClose           — () => void
+//   onCreated(id)     — (newScenarioId) => void; parent re-fetches and
+//                       switches to the new tab.
 //
 // CSV upload is intentionally NOT offered here — adding it requires
 // rendering the CSV import modal inside this modal, which would mean
 // nesting dialogs. If the user wants CSV-driven creation they reset
 // the active scenario to empty state and use the CSV bootstrap there.
 
-function NewScenarioModal({ ayeId, ayeLabel, currentScenario, userId, onClose, onCreated }) {
+function NewScenarioModal({
+  ayeId,
+  stageId,
+  ayeLabel,
+  stageDisplayName,
+  currentScenario,
+  userId,
+  onClose,
+  onCreated,
+}) {
   const [label, setLabel] = useState('')
   const [description, setDescription] = useState('')
   // Default path: copy from current if available, else start blank.
@@ -42,12 +56,12 @@ function NewScenarioModal({ ayeId, ayeLabel, currentScenario, userId, onClose, o
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
 
-  // Probe for prior AYE budget at mount.
+  // Probe for prior AYE budget at mount. Same-stage match preferred.
   useEffect(() => {
     let mounted = true
     async function probe() {
       try {
-        const result = await findPriorLockedBudgetSnapshot(ayeId)
+        const result = await findPriorLockedBudgetSnapshot(ayeId, stageId)
         if (mounted) setPriorSnapshot(result)
       } catch {
         if (mounted) setPriorSnapshot(null)
@@ -57,7 +71,7 @@ function NewScenarioModal({ ayeId, ayeLabel, currentScenario, userId, onClose, o
     }
     probe()
     return () => { mounted = false }
-  }, [ayeId])
+  }, [ayeId, stageId])
 
   const priorEnabled = !probeLoading && priorSnapshot !== null
 
@@ -75,31 +89,27 @@ function NewScenarioModal({ ayeId, ayeLabel, currentScenario, userId, onClose, o
         if (!currentScenario) throw new Error('No current scenario to copy from.')
         result = await createScenarioFromCurrent({
           ayeId,
+          stageId,
           sourceScenarioId: currentScenario.id,
           userId,
-          label: trimmedLabel || undefined,  // let auto-label kick in if empty
+          label: trimmedLabel || undefined,
           description: trimmedDescription,
         })
       } else if (path === 'prior') {
         if (!priorSnapshot) throw new Error('No prior locked budget to copy from.')
         result = await createScenarioFromPriorAye({
           ayeId,
+          stageId,
           userId,
           label: trimmedLabel || undefined,
           description: trimmedDescription,
           priorSnapshotId: priorSnapshot.snapshot.id,
         })
-        if (result.skippedNames && result.skippedNames.length > 0) {
-          // Bubble up via parent's notice mechanism — for simplicity we
-          // expose it as a success-with-caveat and the parent surfaces
-          // separately. Here we just call onCreated with the id; the
-          // parent owns the larger UI.
-          // (Consider extending onCreated signature later.)
-        }
       } else {
         // 'blank'
         result = await createBlankScenario({
           ayeId,
+          stageId,
           userId,
           label: trimmedLabel || undefined,
           description: trimmedDescription,
@@ -133,8 +143,8 @@ function NewScenarioModal({ ayeId, ayeLabel, currentScenario, userId, onClose, o
           New scenario
         </h3>
         <p className="font-body italic text-muted text-sm mb-5">
-          Adds a new scenario to {ayeLabel || 'this AYE'}. You can rename
-          it later.
+          Adds a new scenario to {ayeLabel ? `${ayeLabel} ${stageDisplayName || 'Budget'}` : (stageDisplayName || 'this stage')}.
+          You can rename it later.
         </p>
 
         {error && (
@@ -209,7 +219,9 @@ function NewScenarioModal({ ayeId, ayeLabel, currentScenario, userId, onClose, o
                   probeLoading
                     ? 'Checking for prior budget…'
                     : priorSnapshot
-                      ? `Copy from ${priorSnapshot.aye.label} ${priorSnapshot.snapshot.snapshot_type === 'final' ? 'Final' : 'Preliminary'}`
+                      ? priorSnapshot.stage_match === 'same'
+                        ? `Copy from ${priorSnapshot.aye.label} ${priorSnapshot.snapshot.stage_display_name_at_lock}`
+                        : `Closest match: ${priorSnapshot.aye.label} ${priorSnapshot.snapshot.stage_display_name_at_lock}`
                       : 'No prior locked budget exists yet'
                 }
               />

@@ -4,7 +4,7 @@ import AYESelector from '../AYESelector'
 import { findPriorLockedBudgetSnapshot } from '../../lib/budgetBootstrap'
 
 // First-page prompt rendered inside the budget detail zone when an
-// AYE has no scenario yet. Two clear sections:
+// (AYE, Stage) has no scenario yet. Two clear sections:
 //
 //   1. Confirm academic year — prominent AYESelector so first-time
 //      users see explicitly which year they're budgeting for. Defaults
@@ -12,27 +12,31 @@ import { findPriorLockedBudgetSnapshot } from '../../lib/budgetBootstrap'
 //      path.
 //
 //   2. Pick a bootstrap path — three options. "Bootstrap from prior
-//      AYE" is greyed out until a prior locked snapshot exists. The
-//      probe runs whenever the AYE selection changes (the prior-AYE
-//      relationship is AYE-relative).
+//      AYE" is greyed out until a prior locked snapshot exists for
+//      THIS STAGE (with fallback to any-stage prior). The probe re-
+//      runs whenever AYE or stage changes.
 //
 // Props:
-//   ayeId            uuid       — the active AYE id
-//   ayeLabel         string     — the active AYE label (display)
-//   onAyeChange(id)  ()         — switch the active AYE
-//   onStartBlank     ()         — Start with $0 path
-//   onUploadCsv      ()         — Open CSV import modal path
-//   onBootstrapPrior (snapshot) — Bootstrap from prior AYE path; the
-//                                  parent receives the resolved
-//                                  {snapshot, aye} so it doesn't have
-//                                  to reload
-//   creating         boolean    — true while a creation is in flight;
-//                                  disables all buttons
-//   error            string?    — error text to surface above the buttons
+//   ayeId             uuid       — the active AYE id
+//   ayeLabel          string     — the active AYE label (display)
+//   stageId           uuid       — the active stage id
+//   stageDisplayName  string     — e.g. "Preliminary Budget"
+//   onAyeChange(id)              — switch the active AYE
+//   onStartBlank      ()         — Start with $0 path
+//   onUploadCsv       ()         — Open CSV import modal path
+//   onBootstrapPrior  (snapshot) — Bootstrap from prior AYE path; the
+//                                    parent receives the resolved
+//                                    { snapshot, aye, stage_match } so
+//                                    it doesn't have to reload
+//   creating          boolean    — true while a creation is in flight;
+//                                    disables all buttons
+//   error             string?    — error text to surface above the buttons
 
 function BudgetEmptyState({
   ayeId,
   ayeLabel,
+  stageId,
+  stageDisplayName,
   onAyeChange,
   onStartBlank,
   onUploadCsv,
@@ -43,8 +47,10 @@ function BudgetEmptyState({
   const [priorSnapshot, setPriorSnapshot] = useState(null)
   const [probeLoading, setProbeLoading] = useState(true)
 
-  // Re-probe whenever the AYE changes — switching years can flip
-  // "no prior budget" to "prior available" (or vice versa) instantly.
+  // Re-probe whenever AYE or stage changes. Same-stage matching is
+  // what the user most cares about — bootstrapping AYE 2027
+  // Preliminary Budget should pull from AYE 2026 Preliminary Budget,
+  // not from AYE 2026 Final.
   useEffect(() => {
     if (!ayeId) {
       setPriorSnapshot(null)
@@ -55,7 +61,7 @@ function BudgetEmptyState({
     setProbeLoading(true)
     async function probe() {
       try {
-        const result = await findPriorLockedBudgetSnapshot(ayeId)
+        const result = await findPriorLockedBudgetSnapshot(ayeId, stageId)
         if (mounted) setPriorSnapshot(result)
       } catch {
         if (mounted) setPriorSnapshot(null)
@@ -67,15 +73,17 @@ function BudgetEmptyState({
     return () => {
       mounted = false
     }
-  }, [ayeId])
+  }, [ayeId, stageId])
 
   const priorEnabled = !probeLoading && priorSnapshot !== null
+
+  const stageLabel = stageDisplayName || 'Budget'
 
   return (
     <div className="flex items-center justify-center min-h-[60vh] py-6">
       <Card className="max-w-2xl w-full">
         <h2 className="font-display text-navy text-[22px] mb-1 leading-tight">
-          Set up your Preliminary Budget
+          Set up your {stageLabel}
         </h2>
         <p className="font-body italic text-muted text-sm mb-6">
           Two quick steps. You can rename, edit, or reset later.
@@ -121,7 +129,9 @@ function BudgetEmptyState({
                 probeLoading
                   ? 'Checking for prior budget…'
                   : priorSnapshot
-                    ? `Copy from ${priorSnapshot.aye.label} ${priorSnapshot.snapshot.snapshot_type === 'final' ? 'Final' : 'Preliminary'}`
+                    ? priorSnapshot.stage_match === 'same'
+                      ? `Copy from ${priorSnapshot.aye.label} ${priorSnapshot.snapshot.stage_display_name_at_lock}`
+                      : `Closest match: ${priorSnapshot.aye.label} ${priorSnapshot.snapshot.stage_display_name_at_lock}`
                     : 'No prior locked budget exists yet'
               }
             />

@@ -1,20 +1,20 @@
-// Lock-workflow helpers for the Preliminary Budget module.
+// Lock-workflow helpers for the Budget module's stage scenarios.
 //
-// Three transitions need orchestration:
+// Migration 011 generalized Budget to support configurable workflow
+// stages. The lock workflow is stage-agnostic: every stage in every
+// workflow uses the same submit / approve / reject transitions.
+//
+// Three transitions:
 //
 //   drafting → pending_lock_review     ("Submit for Lock Review")
-//     - Pre-flight validation:
-//         * scenario.is_recommended = true
-//         * at least one non-zero budget line
-//         * cascade rules satisfied (school_lock_cascade_rules vs.
-//           module_instances state for the current AYE)
-//     - On any failure, admin may override with required justification.
-//     - Client-side UPDATE to scenarios.state.
+//     - Pre-flight validation (validateScenarioForLock + checkCascadeRules)
+//     - On any failure, admin may override with required justification
+//     - Client-side UPDATE to budget_stage_scenarios.state
 //
 //   pending_lock_review → locked       ("Approve and Lock")
 //     - Approver clicks; we call the RPC
-//       lock_preliminary_budget_scenario(scenario_id, locked_via,
-//                                        override_justification)
+//       lock_budget_stage_scenario(scenario_id, locked_via,
+//                                  override_justification)
 //       which atomically inserts the snapshot and flips state.
 //
 //   pending_lock_review → drafting     ("Reject and return to drafting")
@@ -27,17 +27,12 @@
 
 import { supabase } from './supabase'
 
-// Pure validation over scenario + lines. Returns array of failure
-// objects each shaped { kind, message }. kind values are stable strings
-// callers can branch on for custom rendering.
+// Pure validation over scenario + lines.
 export function validateScenarioForLock(scenario, lines) {
   const failures = []
 
   if (!scenario) {
-    failures.push({
-      kind: 'missing_scenario',
-      message: 'No active scenario.',
-    })
+    failures.push({ kind: 'missing_scenario', message: 'No active scenario.' })
     return failures
   }
 
@@ -69,21 +64,24 @@ export function validateScenarioForLock(scenario, lines) {
 }
 
 // Cascade-rule check. Looks up school_lock_cascade_rules for
-// module_being_locked = 'preliminary_budget' and verifies each required
+// module_being_locked = 'budget' and verifies each required upstream
 // module is in the required state for the AYE.
 //
 // Returns { failures: [{required_module, required_state, actual_state,
 //                       is_required, message}] }.
 //
-// "actual_state" is 'not started' when no module_instance row exists for
-// that (module, aye) — typical during phased rollout where the upstream
-// module hasn't been built yet.
+// "actual_state" is 'not started' when no module_instance row exists
+// for that (module, aye).
+//
+// Note: cascade rules are per-MODULE, not per-stage. All stages of
+// the budget workflow share the same upstream requirements (per
+// architecture Section 9.7 — per-stage rules are not yet in scope).
 export async function checkCascadeRules(ayeId) {
   const [rulesResult, instancesResult] = await Promise.all([
     supabase
       .from('school_lock_cascade_rules')
       .select('module_being_locked, required_module, required_state, is_required')
-      .eq('module_being_locked', 'preliminary_budget'),
+      .eq('module_being_locked', 'budget'),
     supabase
       .from('module_instances')
       .select('state, modules(code)')
@@ -115,26 +113,18 @@ export async function checkCascadeRules(ayeId) {
   return { failures }
 }
 
-// Human-readable module label for validation messages. Falls back to
-// the raw code if no friendly mapping exists. Could be replaced by a
-// query against modules.display_name when it's worth the round-trip.
 function humanModuleLabel(code) {
   return ({
     enrollment_estimator: 'Enrollment Estimator',
     tuition_worksheet:    'Tuition Worksheet',
     staffing:             'Staffing',
-    preliminary_budget:   'Preliminary Budget',
+    budget:               'Budget',
     enrollment_audit:     'Enrollment Audit',
-    final_budget:         'Final Budget',
     chart_of_accounts:    'Chart of Accounts',
   })[code] || code
 }
 
-// Submit transition. Caller has already run validation and either
-// passed or has an override + justification. We just UPDATE the row.
-//
-// locked_via and override_justification are saved on the scenarios row
-// here so they're carried into the eventual snapshot at approve time.
+// Submit transition.
 export async function submitScenarioForLockReview({
   scenarioId,
   lockedVia = 'normal',
@@ -151,18 +141,16 @@ export async function submitScenarioForLockReview({
     updated_by: userId ?? null,
   }
   const { error } = await supabase
-    .from('preliminary_budget_scenarios')
+    .from('budget_stage_scenarios')
     .update(updates)
     .eq('id', scenarioId)
   if (error) throw error
 }
 
-// Reject transition. Returns scenario to drafting; clears locked_via
-// and override_justification (a fresh override needs a fresh
-// justification on resubmit).
+// Reject transition.
 export async function rejectScenarioLock({ scenarioId, userId }) {
   const { error } = await supabase
-    .from('preliminary_budget_scenarios')
+    .from('budget_stage_scenarios')
     .update({
       state: 'drafting',
       locked_via: null,
@@ -173,31 +161,20 @@ export async function rejectScenarioLock({ scenarioId, userId }) {
   if (error) throw error
 }
 
-// Approve + lock. Calls the SECURITY DEFINER RPC which atomically:
-//   1. Validates state and is_recommended at the DB layer
-//   2. Computes KPIs at lock time
-//   3. Inserts budget_snapshots header
-//   4. Inserts budget_snapshot_lines for every line with captured
-//      account state (code, name, hierarchy path, flags)
-//   5. Updates scenarios.state to 'locked'
+// Approve + lock. Calls the stage-aware SECURITY DEFINER RPC.
 //
-// If any step fails, the whole transaction rolls back — there is no
-// scenario where the row says 'locked' but the snapshot is missing.
-//
-// Reads the scenario's saved locked_via / override_justification (set
-// by submitScenarioForLockReview) and forwards them to the RPC so the
-// snapshot captures the override trail.
+// The RPC reads the scenario's stage_id internally and captures stage
+// metadata at lock time, so callers don't need to pass it.
 export async function approveAndLockScenario({ scenarioId }) {
-  // Read the in-flight override metadata that submit saved.
   const { data: scenario, error: readErr } = await supabase
-    .from('preliminary_budget_scenarios')
+    .from('budget_stage_scenarios')
     .select('locked_via, override_justification')
     .eq('id', scenarioId)
     .single()
   if (readErr) throw readErr
 
   const { data, error } = await supabase.rpc(
-    'lock_preliminary_budget_scenario',
+    'lock_budget_stage_scenario',
     {
       p_scenario_id: scenarioId,
       p_locked_via: scenario?.locked_via || 'normal',
@@ -205,6 +182,5 @@ export async function approveAndLockScenario({ scenarioId }) {
     }
   )
   if (error) throw error
-  // RPC returns a single uuid (the snapshot id).
   return Array.isArray(data) ? data[0] : data
 }

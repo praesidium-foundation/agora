@@ -1,45 +1,23 @@
 -- ============================================================================
--- Migration 010: Atomic lock for Preliminary Budget scenarios
+-- Migration 012: Atomic lock for stage-aware Budget scenarios
 --
--- Architecture Section 5.1 ("Snapshots"): if snapshot capture fails, the
--- lock transition rolls back. There is no scenario where a module says
--- "locked" but the snapshot doesn't exist. To enforce that, the lock
--- transition needs to be a single transaction that inserts the snapshot
--- header, inserts every snapshot line, and flips the scenario state —
--- all or nothing.
+-- Replaces the dropped-and-never-applied lock_preliminary_budget_scenario.
+-- The new function is stage-agnostic — it works for any stage in the
+-- Budget workflow (Preliminary, Final, Reforecast, etc.) and captures
+-- the stage's display name / short name / type into the snapshot at
+-- lock time so post-lock workflow renames don't disturb history.
 --
--- This migration adds:
---
---   coa_hierarchy_path(account_id) — colon-delimited "Top : Mid : Leaf"
---     path for an account, walked from root to the account. Captured by
---     value into budget_snapshot_lines so the snapshot still renders
---     correctly after post-lock COA changes (deactivation, hard-delete,
---     reparenting).
---
---   compute_pb_scenario_kpis(scenario_id) — returns the KPI bundle as a
---     row. Mirrors the JS computeKpis logic in src/lib/budgetTree.js so
---     the captured KPIs match what the user saw in the sidebar at lock
---     time. Personnel total uses the same name-match heuristic
---     ("Personnel" top-level expense account); brittle but matches
---     Libertas's COA structure (CLAUDE.md note for future).
---
---   lock_preliminary_budget_scenario(scenario_id, locked_via,
---                                    override_justification) — the
---     atomic lock entry point. Permissions checked here (approve_lock
---     required); state must be pending_lock_review; on success returns
---     the new snapshot id.
---
--- Submit (drafting → pending_lock_review) and Reject (pending_lock_review
--- → drafting) are still client-side UPDATEs on the scenarios table,
--- gated by the existing edit-perm RLS policy. The UI enforces who can
--- do what (submit_lock / approve_lock); a malicious edit-level user
--- could in theory bypass the UI workflow, which is acceptable under the
--- single-school trust model documented in Appendix D. A column-aware
--- state-transition trigger is the future hardening path.
+-- Atomicity guarantee (architecture Section 5.1): if any step fails,
+-- the whole transaction rolls back. There is no scenario where the
+-- row says 'locked' but the snapshot is missing.
 -- ============================================================================
 
 -- ---- 1. coa_hierarchy_path -----------------------------------------------
 
+-- Walks up parent_id chain from leaf to root and returns colon-delimited
+-- "Top : Mid : Leaf". Captured by value into budget_snapshot_lines so the
+-- snapshot still renders correctly after deactivation, hard-delete, or
+-- reparenting of any account in the chain.
 create or replace function coa_hierarchy_path(p_account_id uuid)
 returns text
 language sql stable
@@ -60,12 +38,21 @@ $$;
 
 grant execute on function coa_hierarchy_path(uuid) to authenticated;
 
--- ---- 2. compute_pb_scenario_kpis -----------------------------------------
+-- ---- 2. compute_budget_scenario_kpis -------------------------------------
 
-create or replace function compute_pb_scenario_kpis(p_scenario_id uuid)
+-- Reused for two purposes: (a) live KPI sidebar reads (eventually — the
+-- UI today computes client-side via budgetTree.js but can be migrated
+-- here when consistent capture is needed), (b) the snapshot capture
+-- inside the lock function below.
+--
+-- Personnel total is identified by name match on the top-level expense
+-- account containing 'personnel' (case-insensitive). Brittle but matches
+-- the existing JS computeKpis logic; future refinement makes Personnel
+-- a school-configurable mapping.
+create or replace function compute_budget_scenario_kpis(p_scenario_id uuid)
 returns table (
   total_income          numeric,
-  total_expense         numeric,
+  total_expenses        numeric,
   net_income            numeric,
   ed_program_dollars    numeric,
   ed_program_ratio      numeric,
@@ -83,8 +70,7 @@ declare
   v_personnel_total    numeric := 0;
   v_personnel_id       uuid;
 begin
-  -- Top-level expense account named 'Personnel' (case-insensitive). Its
-  -- whole subtree's amounts contribute to v_personnel_total.
+  -- Top-level expense account named 'Personnel' (case-insensitive).
   select id into v_personnel_id
     from chart_of_accounts
    where parent_id is null
@@ -93,18 +79,15 @@ begin
    limit 1;
 
   -- Aggregates over budget lines × COA flags.
-  for v_total_income, v_total_expense, v_ed_program_dollars, v_contributions in
-    select
-      coalesce(sum(case when a.account_type = 'income'  and not a.is_pass_thru then l.amount end), 0),
-      coalesce(sum(case when a.account_type = 'expense' and not a.is_pass_thru then l.amount end), 0),
-      coalesce(sum(case when a.is_ed_program_dollars   and not a.is_pass_thru then l.amount end), 0),
-      coalesce(sum(case when a.is_contribution         and not a.is_pass_thru then l.amount end), 0)
-    from preliminary_budget_lines l
-    join chart_of_accounts a on a.id = l.account_id
-    where l.scenario_id = p_scenario_id
-  loop
-    null;  -- single row; the FOR loop is just a clean way to capture into multiple vars
-  end loop;
+  select
+    coalesce(sum(case when a.account_type = 'income'  and not a.is_pass_thru then l.amount end), 0),
+    coalesce(sum(case when a.account_type = 'expense' and not a.is_pass_thru then l.amount end), 0),
+    coalesce(sum(case when a.is_ed_program_dollars   and not a.is_pass_thru then l.amount end), 0),
+    coalesce(sum(case when a.is_contribution         and not a.is_pass_thru then l.amount end), 0)
+   into v_total_income, v_total_expense, v_ed_program_dollars, v_contributions
+   from budget_stage_lines l
+   join chart_of_accounts a on a.id = l.account_id
+  where l.scenario_id = p_scenario_id;
 
   -- Personnel subtree (recursive walk).
   if v_personnel_id is not null then
@@ -115,7 +98,7 @@ begin
         join personnel_tree pt on coa.parent_id = pt.id
     )
     select coalesce(sum(l.amount), 0) into v_personnel_total
-      from preliminary_budget_lines l
+      from budget_stage_lines l
      where l.scenario_id = p_scenario_id
        and l.account_id in (select id from personnel_tree);
   end if;
@@ -133,13 +116,13 @@ begin
 end;
 $$;
 
-grant execute on function compute_pb_scenario_kpis(uuid) to authenticated;
+grant execute on function compute_budget_scenario_kpis(uuid) to authenticated;
 
--- ---- 3. lock_preliminary_budget_scenario ---------------------------------
+-- ---- 3. lock_budget_stage_scenario ---------------------------------------
 
-create or replace function lock_preliminary_budget_scenario(
-  p_scenario_id uuid,
-  p_locked_via text default 'normal',
+create or replace function lock_budget_stage_scenario(
+  p_scenario_id            uuid,
+  p_locked_via             text default 'normal',
   p_override_justification text default null
 )
 returns uuid
@@ -149,18 +132,20 @@ set search_path = public
 as $$
 declare
   v_scenario     record;
+  v_stage        record;
+  v_kpis         record;
   v_snapshot_id  uuid;
-  v_kpi          record;
   v_caller       uuid := auth.uid();
 begin
-  -- Permission check. SECURITY DEFINER bypasses RLS but we still want
-  -- to gate by the caller's perm — which we read via auth.uid().
-  if not current_user_has_module_perm('preliminary_budget', 'approve_lock') then
-    raise exception 'Approve-and-lock requires approve_lock permission';
+  -- Permission gate. SECURITY DEFINER bypasses RLS but we still want
+  -- to check the caller's permission via auth.uid().
+  if not current_user_has_module_perm('budget', 'approve_lock') then
+    raise exception 'Approve-and-lock requires approve_lock permission on budget.';
   end if;
 
+  -- Lock + read scenario row.
   select * into v_scenario
-    from preliminary_budget_scenarios
+    from budget_stage_scenarios
    where id = p_scenario_id
    for update;
 
@@ -180,29 +165,40 @@ begin
     raise exception 'Override requires a non-empty justification';
   end if;
 
-  -- Compute KPIs at lock time.
-  select * into v_kpi
-    from compute_pb_scenario_kpis(p_scenario_id);
+  -- Capture stage metadata at lock time so post-lock label edits don't
+  -- alter what this snapshot represents.
+  select s.display_name, s.short_name, s.stage_type
+    into v_stage
+    from module_workflow_stages s
+   where s.id = v_scenario.stage_id;
 
-  -- Insert snapshot header. snapshot_type = 'preliminary' for now;
-  -- final-budget-side will share this table later via snapshot_type =
-  -- 'final'.
+  if v_stage is null then
+    raise exception 'Stage % referenced by scenario % not found', v_scenario.stage_id, p_scenario_id;
+  end if;
+
+  -- KPI capture.
+  select * into v_kpis
+    from compute_budget_scenario_kpis(p_scenario_id);
+
+  -- Snapshot header.
   insert into budget_snapshots (
-    scenario_id, aye_id, snapshot_type,
+    scenario_id, aye_id, stage_id,
     scenario_label, scenario_description, narrative,
     show_narrative_in_pdf, is_recommended,
+    stage_display_name_at_lock, stage_short_name_at_lock, stage_type_at_lock,
     kpi_total_income, kpi_total_expenses, kpi_net_income,
     kpi_ed_program_dollars, kpi_ed_program_ratio,
     kpi_contributions_total, kpi_pct_personnel,
     locked_at, locked_by, locked_via, override_justification,
     created_by
   ) values (
-    p_scenario_id, v_scenario.aye_id, 'preliminary',
+    p_scenario_id, v_scenario.aye_id, v_scenario.stage_id,
     v_scenario.scenario_label, v_scenario.description, v_scenario.narrative,
     v_scenario.show_narrative_in_pdf, v_scenario.is_recommended,
-    v_kpi.total_income, v_kpi.total_expense, v_kpi.net_income,
-    v_kpi.ed_program_dollars, v_kpi.ed_program_ratio,
-    v_kpi.contributions_total, v_kpi.pct_personnel,
+    v_stage.display_name, v_stage.short_name, v_stage.stage_type,
+    v_kpis.total_income, v_kpis.total_expenses, v_kpis.net_income,
+    v_kpis.ed_program_dollars, v_kpis.ed_program_ratio,
+    v_kpis.contributions_total, v_kpis.pct_personnel,
     now(), v_caller,
     p_locked_via,
     case when p_locked_via = 'override' then trim(p_override_justification) else null end,
@@ -210,11 +206,7 @@ begin
   )
   returning id into v_snapshot_id;
 
-  -- Insert snapshot lines: one per budget line, with the account state
-  -- captured by value (code, name, hierarchy path, flags, type). After
-  -- this insert the snapshot is independent of any future COA changes —
-  -- deactivation, hard-delete, reparenting all leave snapshot rendering
-  -- unchanged.
+  -- Snapshot lines: account state captured by value.
   insert into budget_snapshot_lines (
     snapshot_id, account_id, account_code, account_name, account_type,
     account_hierarchy_path, is_pass_thru, is_ed_program_dollars,
@@ -225,14 +217,14 @@ begin
     coalesce(coa_hierarchy_path(a.id), a.name),
     a.is_pass_thru, a.is_ed_program_dollars, a.is_contribution,
     l.amount, l.source_type, l.notes
-    from preliminary_budget_lines l
+    from budget_stage_lines l
     join chart_of_accounts a on a.id = l.account_id
    where l.scenario_id = p_scenario_id;
 
-  -- Flip the scenario state. The line-write trigger from Migration 009
-  -- doesn't fire here (we're updating scenarios, not lines); the
-  -- scenario itself has no state-transition trigger today.
-  update preliminary_budget_scenarios
+  -- Flip scenario state. Only the scenarios row state changes here;
+  -- the line trigger from Migration 011 doesn't fire on this UPDATE
+  -- (we're updating scenarios, not lines).
+  update budget_stage_scenarios
      set state = 'locked',
          locked_at = now(),
          locked_by = v_caller,
@@ -246,8 +238,8 @@ begin
 end;
 $$;
 
-grant execute on function lock_preliminary_budget_scenario(uuid, text, text) to authenticated;
+grant execute on function lock_budget_stage_scenario(uuid, text, text) to authenticated;
 
 -- ============================================================================
--- END OF MIGRATION 010
+-- END OF MIGRATION 012
 -- ============================================================================

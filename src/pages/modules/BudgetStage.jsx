@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthProvider'
 import { useModulePermission } from '../../lib/usePermission'
@@ -35,20 +35,17 @@ import SubmitLockModal from '../../components/budget/SubmitLockModal'
 import ApproveLockBar from '../../components/budget/ApproveLockBar'
 import LockedBanner from '../../components/budget/LockedBanner'
 
-// Preliminary Budget — three-zone shell (header + KPI sidebar + detail).
+// Stage-aware Budget page. The Budget module supports configurable
+// workflows (Migration 010 / 011) — Libertas's workflow has two stages
+// (Preliminary, Final), but every school's workflow can differ. This
+// component is one page with stageId in the URL; it works for any stage
+// of any workflow.
 //
-// Commit D (this commit) adds multi-scenario support:
-//   - Scenario tabs in the header. Star marks the recommended scenario.
-//     Each tab has a kebab menu: Rename / Edit description / Mark as
-//     recommended / Delete.
-//   - "+ New scenario" → modal with label, description, and bootstrap
-//     path (Copy from current, Bootstrap from prior AYE, Start with $0).
-//   - Recommendation requirement: Submit-for-Lock-Review tooltip notes
-//     that the scenario must be marked recommended before submit.
-//     (Lock workflow itself lands in Commit E.)
+// URL: /modules/budget/:stageId
 //
-// One scenario per AYE is still pre-selected on first load; switching
-// AYE picks the most recently-created scenario for that AYE.
+// Title and breadcrumb are dynamic from the stage's display_name. All
+// internal references to "preliminary" or "final" budgets have been
+// removed in favor of stage-agnostic language.
 
 const STATE_BADGES = {
   drafting: { label: 'DRAFTING', variant: 'navy' },
@@ -85,6 +82,7 @@ function ActionButton({ label, disabled, primary, onClick, title }) {
 }
 
 function HeaderZone({
+  stage,
   ayeLabel,
   selectedAyeId,
   onAyeChange,
@@ -99,7 +97,7 @@ function HeaderZone({
   resetting,
   canEdit,
   canSubmitLock,
-  scenarioForActions,  // active scenario object, for state badge + reset gate
+  scenarioForActions,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -110,15 +108,6 @@ function HeaderZone({
     return () => window.removeEventListener('click', close)
   }, [menuOpen])
 
-  // Submit-for-lock-review enable rules:
-  //   - active scenario exists
-  //   - state is drafting (not already submitted / locked)
-  //   - is_recommended (architecture Section 3.4 universal Rule C)
-  //   - user has submit_lock permission
-  // Validation of cascade rules + non-zero lines happens inside the
-  // SubmitLockModal pre-flight; we don't pre-disable on those here so
-  // the user sees the modal's failure list and (if admin) the override
-  // option.
   const submitDisabled =
     !scenarioForActions ||
     !canSubmitLock ||
@@ -135,14 +124,19 @@ function HeaderZone({
           ? `Scenario is ${scenarioForActions.state}; submit not available in this state.`
           : 'Submit for lock review.'
 
+  // Stage display: prefer the configured display_name; short_name in
+  // the breadcrumb keeps the trail compact.
+  const stageDisplay = stage?.display_name || 'Budget'
+  const stageShort   = stage?.short_name   || stageDisplay
+
   return (
     <header className="sticky top-0 z-20 bg-cream pt-1 pb-3 -mt-1 border-b-[0.5px] border-card-border">
-      <Breadcrumb items={[{ label: 'Budget' }, { label: 'Preliminary Budget' }]} />
+      <Breadcrumb items={[{ label: 'Budget' }, { label: stageShort }]} />
 
       <div className="flex items-end justify-between gap-4 flex-wrap">
         <div className="flex items-baseline gap-3 flex-wrap">
           <h1 className="font-display text-navy text-[26px] leading-tight">
-            {ayeLabel ? `${ayeLabel} Preliminary Budget` : 'Preliminary Budget'}
+            {ayeLabel ? `${ayeLabel} ${stageDisplay}` : stageDisplay}
           </h1>
           {scenarioForActions && <StateBadge state={scenarioForActions.state} />}
         </div>
@@ -207,9 +201,6 @@ function HeaderZone({
         </div>
       </div>
 
-      {/* Scenario tab strip. Renders only when at least one scenario
-          exists for the active AYE; on the empty state the bootstrap
-          card carries the AYE-selection step instead. */}
       {scenarios.length > 0 && (
         <div className="mt-3 -mb-3 border-b-[0.5px] border-card-border">
           <ScenarioTabs
@@ -226,32 +217,32 @@ function HeaderZone({
   )
 }
 
-function PreliminaryBudget() {
+function BudgetStage() {
+  const { stageId } = useParams()
   const { user } = useAuth()
   const { allowed: canView, loading: permLoading } = useModulePermission(
-    'preliminary_budget',
+    'budget',
     'view'
   )
-  const { allowed: canEdit } = useModulePermission(
-    'preliminary_budget',
-    'edit'
-  )
+  const { allowed: canEdit } = useModulePermission('budget', 'edit')
   const { allowed: canSubmitLock } = useModulePermission(
-    'preliminary_budget',
+    'budget',
     'submit_lock'
   )
   const { allowed: canApproveLock } = useModulePermission(
-    'preliminary_budget',
+    'budget',
     'approve_lock'
   )
-  const { allowed: canPbAdmin } = useModulePermission(
-    'preliminary_budget',
-    'admin'
-  )
+  const { allowed: canPbAdmin } = useModulePermission('budget', 'admin')
   const { allowed: canEditCoa } = useModulePermission(
     'chart_of_accounts',
     'edit'
   )
+
+  // Stage metadata (loaded from module_workflow_stages) — drives title,
+  // breadcrumb, and bootstrap-from-prior stage matching.
+  const [stage, setStage] = useState(null)
+  const [stageError, setStageError] = useState(null)
 
   const [selectedAyeId, setSelectedAyeId] = useState(null)
   const [aye, setAye] = useState(null)
@@ -271,13 +262,8 @@ function PreliminaryBudget() {
   const [resetting, setResetting] = useState(false)
 
   const [addAccountOpen, setAddAccountOpen] = useState(false)
-
-  // Multi-scenario UI modals
   const [newScenarioOpen, setNewScenarioOpen] = useState(false)
   const [settingsModal, setSettingsModal] = useState(null)
-  // settingsModal shape: { scenarioId, field: 'label' | 'description' } | null
-
-  // Lock-workflow modal
   const [submitLockOpen, setSubmitLockOpen] = useState(false)
 
   const [autoDetectDismissed, setAutoDetectDismissed] = useState(false)
@@ -289,12 +275,42 @@ function PreliminaryBudget() {
     [scenarios, activeScenarioId]
   )
 
+  // Load stage metadata when stageId in the URL changes. The stage row
+  // is small (label + short label + type) and tells the page what
+  // budget stage it represents.
+  useEffect(() => {
+    if (!stageId) {
+      setStage(null)
+      return
+    }
+    let mounted = true
+    setStageError(null)
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('module_workflow_stages')
+        .select('id, stage_type, display_name, short_name, sort_order, target_month')
+        .eq('id', stageId)
+        .maybeSingle()
+      if (!mounted) return
+      if (error) {
+        setStageError(error.message)
+        setStage(null)
+        return
+      }
+      if (!data) {
+        setStageError(`Stage ${stageId} not found.`)
+        setStage(null)
+        return
+      }
+      setStage(data)
+    })()
+    return () => { mounted = false }
+  }, [stageId])
+
   // ---- data load -------------------------------------------------------
 
-  // Load scenarios + accounts. Active scenario id resolved here too:
-  // preserve current active when possible; otherwise fall back to the
-  // first scenario in the AYE.
   const loadAyeContext = useCallback(async (ayeId, preferredActiveId = null) => {
+    if (!stageId) return
     setDataLoading(true)
     setDataError(null)
     setBootstrapError(null)
@@ -307,9 +323,10 @@ function PreliminaryBudget() {
         .eq('id', ayeId)
         .single(),
       supabase
-        .from('preliminary_budget_scenarios')
-        .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf, created_at')
+        .from('budget_stage_scenarios')
+        .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf, created_at, locked_at, locked_by, locked_via, override_justification')
         .eq('aye_id', ayeId)
+        .eq('stage_id', stageId)
         .order('created_at', { ascending: true }),
       supabase
         .from('chart_of_accounts')
@@ -327,8 +344,6 @@ function PreliminaryBudget() {
     setScenarios(list)
     setAccounts(accountsResult.data || [])
 
-    // Pick active scenario: prefer caller's hint, else preserve current,
-    // else the first one in the AYE.
     let active = null
     if (preferredActiveId && list.some((s) => s.id === preferredActiveId)) {
       active = preferredActiveId
@@ -341,7 +356,7 @@ function PreliminaryBudget() {
 
     if (active) {
       const { data: lineRows, error: linesErr } = await supabase
-        .from('preliminary_budget_lines')
+        .from('budget_stage_lines')
         .select('id, scenario_id, account_id, amount, source_type, notes')
         .eq('scenario_id', active)
       if (linesErr) {
@@ -355,15 +370,13 @@ function PreliminaryBudget() {
     }
 
     setDataLoading(false)
-  }, [activeScenarioId])
+  }, [activeScenarioId, stageId])
 
-  // Lines-only reload, used when switching scenario tabs (cheaper than
-  // re-fetching the full AYE context).
   const loadLines = useCallback(async (scenarioId) => {
     setDataLoading(true)
     setDataError(null)
     const { data, error } = await supabase
-      .from('preliminary_budget_lines')
+      .from('budget_stage_lines')
       .select('id, scenario_id, account_id, amount, source_type, notes')
       .eq('scenario_id', scenarioId)
     if (error) {
@@ -374,22 +387,20 @@ function PreliminaryBudget() {
     setDataLoading(false)
   }, [])
 
-  // Initial AYE load (and any AYE switch).
+  // Reload when AYE OR stage changes — switching between Preliminary
+  // and Final (or any other stages) should refetch everything for the
+  // new stage scope.
   useEffect(() => {
-    if (!selectedAyeId || !canView) return
+    if (!selectedAyeId || !canView || !stageId) return
     let mounted = true
     ;(async () => {
       await loadAyeContext(selectedAyeId)
       if (!mounted) return
     })()
     return () => { mounted = false }
-    // loadAyeContext changes on every render due to activeScenarioId
-    // dependency; re-run only when selectedAyeId or canView changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAyeId, canView])
+  }, [selectedAyeId, canView, stageId])
 
-  // Scenario switch — reload lines for the newly-selected scenario.
-  // Skip on initial mount where loadAyeContext already loaded them.
   const initialMountRef = useRef(true)
   useEffect(() => {
     if (initialMountRef.current) {
@@ -429,8 +440,12 @@ function PreliminaryBudget() {
     setBootstrapError(null)
     setBootstrapNotice(null)
     try {
-      const result = await createBlankScenario({ ayeId: selectedAyeId, userId: user?.id })
-      await loadAyeContext(selectedAyeId, result.scenarioId)
+      await createBlankScenario({
+        ayeId: selectedAyeId,
+        stageId,
+        userId: user?.id,
+      })
+      await loadAyeContext(selectedAyeId)
     } catch (e) {
       setBootstrapError(e.message || String(e))
     } finally {
@@ -445,19 +460,25 @@ function PreliminaryBudget() {
     try {
       const result = await createScenarioFromPriorAye({
         ayeId: selectedAyeId,
+        stageId,
         userId: user?.id,
         priorSnapshotId: probeResult.snapshot.id,
       })
+      const sourceLabel = probeResult.stage_match === 'same'
+        ? `${probeResult.aye.label} ${probeResult.snapshot.stage_display_name_at_lock}`
+        : `${probeResult.aye.label} ${probeResult.snapshot.stage_display_name_at_lock} (no prior ${stage?.display_name || 'same-stage'} budget; used closest match)`
+      const noticeParts = [`Bootstrapped from ${sourceLabel}.`]
       if (result.skippedNames && result.skippedNames.length > 0) {
         const list = result.skippedNames.slice(0, 6).join(', ')
         const more =
           result.skippedNames.length > 6
             ? ` and ${result.skippedNames.length - 6} more`
             : ''
-        setBootstrapNotice(
+        noticeParts.push(
           `${result.skippedNames.length} account(s) from the prior budget are no longer in your Chart of Accounts and were skipped: ${list}${more}.`
         )
       }
+      setBootstrapNotice(noticeParts.join(' '))
       await loadAyeContext(selectedAyeId, result.scenarioId)
     } catch (e) {
       setBootstrapError(e.message || String(e))
@@ -471,6 +492,7 @@ function PreliminaryBudget() {
     setBootstrapNotice(null)
     const result = await createScenarioFromCsvRows({
       ayeId: selectedAyeId,
+      stageId,
       userId: user?.id,
       rows,
     })
@@ -481,19 +503,27 @@ function PreliminaryBudget() {
   async function handleResetScenarioLines() {
     if (!activeScenario) return
     if (!window.confirm(
-      `Reset lines in "${activeScenario.scenario_label}"? All ${lines.length} line(s) will be deleted. ` +
-      `The scenario itself stays so you can pick a new bootstrap path.`
+      `Reset lines in "${activeScenario.scenario_label}"? All ${lines.length} line(s) will be deleted ` +
+      `and the scenario will return to the empty start prompt.`
     )) {
       return
     }
     setResetting(true)
     setDataError(null)
     try {
-      const { error } = await supabase
-        .from('preliminary_budget_lines')
+      const { error: linesErr } = await supabase
+        .from('budget_stage_lines')
         .delete()
         .eq('scenario_id', activeScenario.id)
-      if (error) throw error
+      if (linesErr) throw linesErr
+      const { error: scenarioErr } = await supabase
+        .from('budget_stage_scenarios')
+        .delete()
+        .eq('id', activeScenario.id)
+      if (scenarioErr) throw scenarioErr
+      setScenarios((prev) => prev.filter((s) => s.id !== activeScenario.id))
+      const remaining = scenarios.filter((s) => s.id !== activeScenario.id)
+      setActiveScenarioId(remaining.length > 0 ? remaining[0].id : null)
       setLines([])
       setUndoStack([])
     } catch (e) {
@@ -522,7 +552,7 @@ function PreliminaryBudget() {
       )
 
       const { error } = await supabase
-        .from('preliminary_budget_lines')
+        .from('budget_stage_lines')
         .update({ amount: newAmount, updated_by: user?.id })
         .eq('id', targetLine.id)
 
@@ -554,7 +584,7 @@ function PreliminaryBudget() {
     })
   }, [undoStack, lines, handleSaveAmount])
 
-  // ---- auto-detect: add selected unbudgeted accounts at $0 -------------
+  // ---- auto-detect: add unbudgeted at $0 -------------------------------
 
   async function handleAddUnbudgeted(accountIds) {
     if (!activeScenario) return
@@ -567,7 +597,7 @@ function PreliminaryBudget() {
       updated_by: user?.id,
     }))
     const { error } = await supabase
-      .from('preliminary_budget_lines')
+      .from('budget_stage_lines')
       .insert(newLines)
     if (error) throw error
     await loadLines(activeScenario.id)
@@ -613,24 +643,19 @@ function PreliminaryBudget() {
       return
     }
     if (action === 'recommend') {
-      // Two-step update: clear all other recommended in this AYE, then
-      // set this one. Sequential client-side updates rather than a server
-      // function — the inconsistency window is brief and the partial
-      // unique index only enforces uniqueness on locked recommended,
-      // which is unaffected here.
       try {
         const otherIds = scenarios
           .filter((s) => s.id !== scenarioId && s.is_recommended)
           .map((s) => s.id)
         if (otherIds.length > 0) {
           const { error: clearErr } = await supabase
-            .from('preliminary_budget_scenarios')
+            .from('budget_stage_scenarios')
             .update({ is_recommended: false, updated_by: user?.id })
             .in('id', otherIds)
           if (clearErr) throw clearErr
         }
         const { error: setErr } = await supabase
-          .from('preliminary_budget_scenarios')
+          .from('budget_stage_scenarios')
           .update({ is_recommended: true, updated_by: user?.id })
           .eq('id', scenarioId)
         if (setErr) throw setErr
@@ -656,20 +681,16 @@ function PreliminaryBudget() {
         return
       }
       try {
-        // Delete lines first (cascade would also handle this, but
-        // explicit delete makes the audit log clearer).
         const { error: linesErr } = await supabase
-          .from('preliminary_budget_lines')
+          .from('budget_stage_lines')
           .delete()
           .eq('scenario_id', scenarioId)
         if (linesErr) throw linesErr
         const { error: scenarioErr } = await supabase
-          .from('preliminary_budget_scenarios')
+          .from('budget_stage_scenarios')
           .delete()
           .eq('id', scenarioId)
         if (scenarioErr) throw scenarioErr
-        // After deleting active scenario, reset active so loadAyeContext
-        // picks the next one (or null when no scenarios remain).
         const nextActive = scenarioId === activeScenarioId ? null : activeScenarioId
         setActiveScenarioId(nextActive)
         await loadAyeContext(selectedAyeId, nextActive)
@@ -687,7 +708,7 @@ function PreliminaryBudget() {
         ? { scenario_label: label, updated_by: user?.id }
         : { description, updated_by: user?.id }
     const { error } = await supabase
-      .from('preliminary_budget_scenarios')
+      .from('budget_stage_scenarios')
       .update(updates)
       .eq('id', settingsModal.scenarioId)
     if (error) throw error
@@ -697,9 +718,6 @@ function PreliminaryBudget() {
 
   // ---- lock workflow ---------------------------------------------------
 
-  // SubmitLockModal calls onConfirm with { lockedVia, overrideJustification }
-  // after pre-flight validation passes (or the user overrode). Persist
-  // the override metadata + flip state to pending_lock_review.
   async function handleSubmitLockConfirm({ lockedVia, overrideJustification }) {
     if (!activeScenario) return
     await submitScenarioForLockReview({
@@ -712,9 +730,6 @@ function PreliminaryBudget() {
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
 
-  // Approve calls the SECURITY DEFINER RPC. The RPC validates the
-  // scenario state and is_recommended at the DB layer, computes KPIs,
-  // inserts the snapshot atomically, and flips state to locked.
   async function handleApprove() {
     if (!activeScenario) return
     await approveAndLockScenario({ scenarioId: activeScenario.id })
@@ -727,10 +742,6 @@ function PreliminaryBudget() {
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
 
-  // Resolve a display name for the scenario's locked_by user. We don't
-  // store it on the scenario row; pull from user_profiles when the
-  // banner needs it. Cached locally per scenario id so re-renders
-  // don't re-fetch.
   const [lockedByName, setLockedByName] = useState(null)
   useEffect(() => {
     if (!activeScenario?.locked_by) {
@@ -762,12 +773,12 @@ function PreliminaryBudget() {
   if (!canView) {
     return (
       <AppShell>
-        <Breadcrumb items={[{ label: 'Budget' }, { label: 'Preliminary Budget' }]} />
+        <Breadcrumb items={[{ label: 'Budget' }, { label: stage?.short_name || 'Stage' }]} />
         <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
           You don't have access to this module.
         </h1>
         <p className="text-body mb-6">
-          Preliminary Budget access requires the appropriate module permission.
+          Budget access requires the appropriate module permission.
         </p>
         <Link
           to="/dashboard"
@@ -775,6 +786,36 @@ function PreliminaryBudget() {
         >
           Back to Dashboard
         </Link>
+      </AppShell>
+    )
+  }
+
+  if (stageError) {
+    return (
+      <AppShell>
+        <Breadcrumb items={[{ label: 'Budget' }, { label: 'Stage not found' }]} />
+        <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
+          Budget stage not found.
+        </h1>
+        <p className="text-body mb-2">{stageError}</p>
+        <p className="text-muted italic mb-6 text-sm">
+          The stage may have been removed from the workflow. Check the
+          sidebar for current stages, or contact a system admin.
+        </p>
+        <Link
+          to="/dashboard"
+          className="inline-block bg-navy text-gold px-4 py-2 rounded text-sm hover:opacity-90 transition-opacity"
+        >
+          Back to Dashboard
+        </Link>
+      </AppShell>
+    )
+  }
+
+  if (!stage) {
+    return (
+      <AppShell>
+        <p className="text-muted">Loading stage…</p>
       </AppShell>
     )
   }
@@ -790,6 +831,7 @@ function PreliminaryBudget() {
       <div className="-mx-6 -my-6 flex flex-col h-[calc(100vh-3.5rem)]">
         <div className="px-6">
           <HeaderZone
+            stage={stage}
             ayeLabel={aye?.label}
             selectedAyeId={selectedAyeId}
             onAyeChange={setSelectedAyeId}
@@ -847,6 +889,8 @@ function PreliminaryBudget() {
                 <BudgetEmptyState
                   ayeId={selectedAyeId}
                   ayeLabel={aye?.label}
+                  stageDisplayName={stage.display_name}
+                  stageId={stage.id}
                   onAyeChange={setSelectedAyeId}
                   onStartBlank={handleStartBlank}
                   onUploadCsv={() => setCsvOpen(true)}
@@ -856,63 +900,12 @@ function PreliminaryBudget() {
                 />
               ) : (
                 <p className="text-muted italic mt-8">
-                  No budget exists for {aye?.label || 'this AYE'} yet. You
+                  No {stage.display_name} exists for {aye?.label || 'this AYE'} yet. You
                   need <strong>edit</strong> permission to start one.
                 </p>
               )
-            ) : lines.length === 0 ? (
-              // Scenario exists but its lines were just reset. Surface a
-              // mini empty state inside the scenario context — bootstrap
-              // a fresh set of lines without recreating the scenario row.
-              <ScenarioLinesEmpty
-                scenario={activeScenario}
-                ayeLabel={aye?.label}
-                onStartBlank={async () => {
-                  // Reuse blank-population logic: insert posting non-pass-thru
-                  // active accounts at 0 directly into this scenario.
-                  setCreating(true)
-                  setBootstrapError(null)
-                  try {
-                    const accountsResult = await supabase
-                      .from('chart_of_accounts')
-                      .select('id')
-                      .eq('posts_directly', true)
-                      .eq('is_pass_thru', false)
-                      .eq('is_active', true)
-                    if (accountsResult.error) throw accountsResult.error
-                    const newLines = (accountsResult.data || []).map((a) => ({
-                      scenario_id: activeScenario.id,
-                      account_id: a.id,
-                      amount: 0,
-                      source_type: 'manual',
-                      created_by: user?.id,
-                      updated_by: user?.id,
-                    }))
-                    if (newLines.length > 0) {
-                      const { error } = await supabase
-                        .from('preliminary_budget_lines')
-                        .insert(newLines)
-                      if (error) throw error
-                    }
-                    await loadLines(activeScenario.id)
-                  } catch (e) {
-                    setBootstrapError(e.message || String(e))
-                  } finally {
-                    setCreating(false)
-                  }
-                }}
-                creating={creating}
-                error={bootstrapError}
-              />
             ) : (
               <>
-                {/* State-aware header banners. Lock state takes precedence:
-                    - locked → LockedBanner (read-only with snapshot info)
-                    - pending_lock_review → ApproveLockBar for approvers,
-                      passive "pending" badge for everyone else (rendered
-                      inside ApproveLockBar's body)
-                    - drafting → AutoDetectBanner when missing accounts
-                                 exist and the user hasn't dismissed */}
                 {activeScenario.state === 'locked' && (
                   <LockedBanner
                     scenario={activeScenario}
@@ -983,7 +976,9 @@ function PreliminaryBudget() {
       {newScenarioOpen && (
         <NewScenarioModal
           ayeId={selectedAyeId}
+          stageId={stage.id}
           ayeLabel={aye?.label}
+          stageDisplayName={stage.display_name}
           currentScenario={activeScenario}
           userId={user?.id}
           onClose={() => setNewScenarioOpen(false)}
@@ -1014,38 +1009,4 @@ function PreliminaryBudget() {
   )
 }
 
-// Mini empty-state shown after a scenario's lines have been reset (the
-// scenario row still exists). Just one path here — Start with $0 — since
-// the user already chose this scenario and we don't want to surface the
-// bigger Step 1 / Step 2 flow inside an established scenario.
-function ScenarioLinesEmpty({ scenario, ayeLabel, onStartBlank, creating, error }) {
-  return (
-    <div className="flex items-center justify-center min-h-[60vh] py-6">
-      <div className="bg-white border-[0.5px] border-card-border rounded-[10px] px-6 py-8 max-w-md w-full">
-        <h2 className="font-display text-navy text-[20px] mb-2 leading-tight">
-          {scenario.scenario_label} has no budget lines
-        </h2>
-        <p className="font-body text-muted text-sm mb-5 leading-relaxed">
-          Pre-populate this scenario with one $0 line per posting,
-          non-pass-thru, active account. Start typing to fill in
-          amounts. {ayeLabel ? `(${ayeLabel})` : null}
-        </p>
-        {error && (
-          <p className="text-status-red text-sm mb-3" role="alert">
-            {error}
-          </p>
-        )}
-        <button
-          type="button"
-          onClick={onStartBlank}
-          disabled={creating}
-          className="bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {creating ? 'Adding lines…' : 'Pre-populate at $0'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-export default PreliminaryBudget
+export default BudgetStage

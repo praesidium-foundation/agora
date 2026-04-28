@@ -13,6 +13,17 @@ import AYEBadge from './AYEBadge'
 // Each labeled section has an explicit `id` used as the localStorage
 // key for collapsed-state persistence. Dashboard (label: null) has no
 // id because it isn't collapsible.
+//
+// Budget items are SLOTTED dynamically. The Budget module supports
+// configurable workflows (Migration 010); each school's stages are
+// loaded from `get_module_workflow_stages('budget')` and merged into
+// the BUDGET section at runtime. The static config below uses
+// {budgetStageSlot: N} markers indicating where stages 1, 2, 3...
+// should drop in. Schools with N stages: the first N markers are
+// filled; remaining markers vanish; extra stages append to the end
+// of the section. For Libertas (two stages), markers 1 and 2 are
+// filled; positions correspond to the historical Prelim. Budget
+// (slot 1) and Final Budget (slot 2) placements.
 const NAV_SECTIONS = [
   {
     id: null,
@@ -47,9 +58,13 @@ const NAV_SECTIONS = [
       { step: 1, label: 'Enrollment',       to: '/modules/enrollment',          enabled: false, lockKey: 'enrollment_estimator' },
       { step: 2, label: 'Tuition',          to: '/modules/tuition',             enabled: true,  lockKey: 'tuition_worksheet' },
       { step: 3, label: 'Staffing',         to: '/modules/staffing',            enabled: false, lockKey: 'staffing' },
-      { step: 4, label: 'Prelim. Budget',   to: '/modules/preliminary-budget',  enabled: true,  lockKey: 'preliminary_budget' },
+      // Slot 1: first budget workflow stage. For Libertas, becomes
+      // "Prelim. Budget" pointing at /modules/budget/<stage-uuid>.
+      { budgetStageSlot: 1, step: 4 },
       { step: 5, label: 'Enrollment Audit', to: '/modules/enrollment-audit',    enabled: false, lockKey: 'enrollment_audit' },
-      { step: 6, label: 'Final Budget',     to: '/modules/final-budget',        enabled: false, lockKey: 'final_budget' },
+      // Slot 2: second budget workflow stage. For Libertas, becomes
+      // "Final Budget".
+      { budgetStageSlot: 2, step: 6 },
     ],
   },
   {
@@ -104,7 +119,13 @@ function loadCollapsedFromStorage() {
 
 // Find the section ID whose items contain the given pathname. Returns null
 // if no section matches (e.g., on /dashboard which has no labeled section).
+//
+// Dynamic routes (currently /modules/budget/<stage-uuid>) aren't in
+// NAV_SECTIONS — they're filled at runtime by the workflow loader. Match
+// those by URL prefix here so route changes auto-expand the right section
+// even before the workflow data has loaded.
 function findSectionForPath(pathname) {
+  if (pathname.startsWith('/modules/budget/')) return 'budget'
   for (const section of NAV_SECTIONS) {
     if (!section.id) continue
     for (const item of section.items) {
@@ -272,6 +293,13 @@ function AppShell({ children }) {
   const [aye, setAye] = useState(null)
   const [lockedCodes, setLockedCodes] = useState(new Set())
 
+  // Workflow stages for the Budget module. Loaded from
+  // get_module_workflow_stages('budget') on mount; used to fill the
+  // budgetStageSlot markers in NAV_SECTIONS. While loading, slot
+  // positions render as disabled placeholders so the layout stays
+  // stable on first paint.
+  const [budgetStages, setBudgetStages] = useState([])
+
   // Top-level section collapse state. Default: all expanded (empty Set).
   // Hydrated from localStorage on first render.
   const [collapsedSections, setCollapsedSections] = useState(() =>
@@ -313,39 +341,108 @@ function AppShell({ children }) {
     })
   }
 
-  // Load current AYE + which of its module instances are locked.
+  // Load current AYE + locked module instances + budget workflow stages
+  // in parallel. The three calls are independent of each other; running
+  // them together keeps first-paint snappy.
   useEffect(() => {
     let mounted = true
     async function load() {
-      const { data } = await supabase
-        .from('academic_years')
-        .select('id, label, module_instances(state, modules(code))')
-        .eq('is_current', true)
-        .maybeSingle()
+      const [ayeResult, stagesResult] = await Promise.all([
+        supabase
+          .from('academic_years')
+          .select('id, label, module_instances(state, modules(code))')
+          .eq('is_current', true)
+          .maybeSingle(),
+        supabase.rpc('get_module_workflow_stages', { p_module_code: 'budget' }),
+      ])
 
       if (!mounted) return
 
-      if (!data) {
+      if (!ayeResult.data) {
         setAye(null)
         setLockedCodes(new Set())
-        return
-      }
-
-      setAye({ id: data.id, label: data.label })
-
-      const locked = new Set()
-      for (const mi of data.module_instances || []) {
-        if (mi.state === 'locked' && mi.modules?.code) {
-          locked.add(mi.modules.code)
+      } else {
+        setAye({ id: ayeResult.data.id, label: ayeResult.data.label })
+        const locked = new Set()
+        for (const mi of ayeResult.data.module_instances || []) {
+          if (mi.state === 'locked' && mi.modules?.code) {
+            locked.add(mi.modules.code)
+          }
         }
+        setLockedCodes(locked)
       }
-      setLockedCodes(locked)
+
+      // Workflow stages — silently fall back to empty list on failure
+      // (the slot markers will render as "Pending workflow" placeholders).
+      if (!stagesResult.error && stagesResult.data) {
+        setBudgetStages(stagesResult.data)
+      }
     }
     load()
     return () => {
       mounted = false
     }
   }, [])
+
+  // Merge static NAV_SECTIONS with dynamic budget workflow stages. Each
+  // {budgetStageSlot: N} marker is replaced with the Nth stage in the
+  // workflow's sort_order, OR rendered as a disabled placeholder when
+  // the workflow has fewer stages than slots. Extra stages beyond the
+  // last slot are appended to the end of the budget section.
+  const navSections = NAV_SECTIONS.map((section) => {
+    if (section.id !== 'budget') return section
+    const filled = []
+    let highestSlot = 0
+    for (const item of section.items) {
+      if (typeof item.budgetStageSlot === 'number') {
+        highestSlot = Math.max(highestSlot, item.budgetStageSlot)
+        const stage = budgetStages[item.budgetStageSlot - 1]
+        if (stage) {
+          filled.push({
+            step: item.step,
+            label: stage.short_name,
+            to: `/modules/budget/${stage.stage_id}`,
+            enabled: true,
+            // Stage-level lock indicator deferred — module_instances
+            // is per-module, not per-stage. Phase R2 wires real
+            // per-stage lock indicators from budget_stage_scenarios.
+            lockKey: null,
+          })
+        } else {
+          // Workflow has fewer stages than slots — render disabled
+          // placeholder so the column step number stays consistent.
+          filled.push({
+            step: item.step,
+            label: '—',
+            to: '#',
+            enabled: false,
+            lockKey: null,
+          })
+        }
+      } else {
+        filled.push(item)
+      }
+    }
+    // Extra stages (beyond the static slots) append at the end with
+    // step numbers continuing past the existing range.
+    if (budgetStages.length > highestSlot) {
+      const lastStaticStep = section.items.reduce(
+        (max, it) => Math.max(max, it.step || 0),
+        0
+      )
+      for (let i = highestSlot; i < budgetStages.length; i++) {
+        const stage = budgetStages[i]
+        filled.push({
+          step: lastStaticStep + (i - highestSlot) + 1,
+          label: stage.short_name,
+          to: `/modules/budget/${stage.stage_id}`,
+          enabled: true,
+          lockKey: null,
+        })
+      }
+    }
+    return { ...section, items: filled }
+  })
 
   async function handleSignOut() {
     await supabase.auth.signOut()
@@ -386,7 +483,7 @@ function AppShell({ children }) {
         {/* Sidebar (navy, matches header) */}
         <aside className="w-[204px] flex-shrink-0 bg-navy flex flex-col">
           <nav className="flex-1 overflow-y-auto py-4">
-            {NAV_SECTIONS.map((section, sIdx) => {
+            {navSections.map((section, sIdx) => {
               if (section.adminOnly && !profile?.is_system_admin) return null
               const isCollapsible = !!section.id
               const expanded =

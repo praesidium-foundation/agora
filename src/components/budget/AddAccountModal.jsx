@@ -2,19 +2,19 @@ import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import AccountForm from '../coa/AccountForm'
 
-// Inline-add-account flow for the Preliminary Budget (Pattern 1).
+// Inline-add-account flow for the Budget module (Pattern 1).
 //
 // Renders the full COA AccountForm in a modal. On save:
 //
 //   - Inserts the account into chart_of_accounts
 //   - If the new account is posting AND not pass-thru → also inserts a
-//     preliminary_budget_lines row at amount=0 in the active scenario
+//     budget_stage_lines row at amount=0 in the active scenario
 //   - Summary or pass-thru → COA insert only; UI surfaces a friendly
 //     success message explaining why no budget line was created
 //
 // Permission gating: parent only renders this modal when the user has
-// edit permission on BOTH chart_of_accounts and preliminary_budget. The
-// modal itself trusts that and doesn't re-check.
+// edit permission on BOTH chart_of_accounts and budget. The modal
+// itself trusts that and doesn't re-check.
 //
 // Props:
 //   accounts     — full COA list (for parent dropdown)
@@ -63,7 +63,7 @@ function AddAccountModal({ accounts, scenarioId, userId, onClose, onSuccess }) {
 
     // 3. Posting non-pass-thru → add a $0 line to the active scenario.
     const { error: lineError } = await supabase
-      .from('preliminary_budget_lines')
+      .from('budget_stage_lines')
       .insert({
         scenario_id: scenarioId,
         account_id: created.id,

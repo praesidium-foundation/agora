@@ -1,53 +1,50 @@
-// Bootstrap helpers for Preliminary Budget scenarios.
+// Bootstrap helpers for Budget stage scenarios.
 //
-// Three entry paths, all of which create a single preliminary_budget_scenarios
-// row plus an initial set of preliminary_budget_lines:
+// Migration 011 generalized the Budget module to support configurable
+// workflow stages (Preliminary, Final, Reforecast, etc.). All scenarios
+// are scoped to (AYE, Stage) — every bootstrap path here takes both.
 //
-//   1. createBlankScenario  — Start with $0. Pre-populates one line per
-//      posting non-pass-thru active account in the COA, all amounts at 0.
-//   2. createScenarioFromPriorAye — Bootstrap from prior AYE. Copies lines
-//      from the most recent prior locked snapshot (preliminary or final),
-//      mapped back to current COA accounts by code (then by name as
-//      fallback). Returns a list of skipped accounts so the caller can
-//      surface them.
-//   3. createScenarioFromCsvRows — Insert a parsed-and-validated CSV row
-//      set as the initial line list. Caller is responsible for parsing,
-//      format detection, and validation; this function trusts what it's
-//      handed.
+// Three entry paths plus a fourth for multi-scenario:
 //
-// All three return { scenarioId, importedCount, skippedNames? }. Errors
-// bubble up as thrown — callers handle.
+//   1. createBlankScenario — Start with $0. Pre-populates one row per
+//      posting non-pass-thru active account in the COA, all amounts 0.
+//   2. createScenarioFromPriorAye — Bootstrap from prior AYE. Copies
+//      lines from the most recent prior locked snapshot for the SAME
+//      STAGE, falling back to any-stage prior lock if no same-stage
+//      exists. Returns which prior was used + skipped accounts.
+//   3. createScenarioFromCsvRows — Insert a parsed-and-validated CSV
+//      row set as the initial line list. Caller is responsible for
+//      parsing, format detection, and validation.
+//   4. createScenarioFromCurrent — Multi-scenario "+ New scenario"
+//      path; copies from another scenario in the same (AYE, Stage).
 //
-// Scenario_label defaults to "Scenario 1" when no other scenario exists
-// for the AYE; otherwise increments based on existing labels. Caller may
-// override via the `label` option.
+// All return { scenarioId, importedCount, skippedNames?, sourceLabel? }.
 
 import { supabase } from './supabase'
 
-// Pick the next scenario label given the existing ones for this AYE.
-// "Scenario 1" / "Scenario 2" / etc. — purely advisory; user can rename.
-async function nextScenarioLabel(ayeId) {
+// Pick the next scenario label given the existing ones for this
+// (AYE, Stage). "Scenario 1" / "Scenario 2" / etc. — purely advisory;
+// user can rename.
+async function nextScenarioLabel(ayeId, stageId) {
   const { data, error } = await supabase
-    .from('preliminary_budget_scenarios')
+    .from('budget_stage_scenarios')
     .select('scenario_label')
     .eq('aye_id', ayeId)
+    .eq('stage_id', stageId)
   if (error) throw error
   const n = (data || []).length
   return `Scenario ${n + 1}`
 }
 
-// Insert the scenario row and return its id. Centralized so the three
-// paths share the same shape (created_by, created/updated audit, etc.).
-async function insertScenario({ ayeId, label, description, userId }) {
+// Insert the scenario row and return its id.
+async function insertScenario({ ayeId, stageId, label, description, userId }) {
   const { data, error } = await supabase
-    .from('preliminary_budget_scenarios')
+    .from('budget_stage_scenarios')
     .insert({
       aye_id: ayeId,
+      stage_id: stageId,
       scenario_label: label,
       description: description ?? null,
-      // First scenario is recommended by default — most schools create one
-      // scenario, lock it, and that's the recommended choice. User can
-      // unmark or move the marker later.
       is_recommended: false,
       created_by: userId ?? null,
       updated_by: userId ?? null,
@@ -66,15 +63,45 @@ async function insertLines(rows) {
   for (let i = 0; i < rows.length; i += CHUNK) {
     const slice = rows.slice(i, i + CHUNK)
     const { error } = await supabase
-      .from('preliminary_budget_lines')
+      .from('budget_stage_lines')
       .insert(slice)
     if (error) throw error
   }
 }
 
-// Fetch the COA accounts that should pre-populate a budget. Posting,
-// non-pass-thru, active. Used by Start-with-$0 and by the auto-detect
-// notification (Commit C).
+// Path 4 (multi-scenario): copy from an existing scenario in the same
+// (AYE, Stage). Used by "+ New scenario" when the user wants a small-
+// diff alternate.
+export async function createScenarioFromCurrent({ ayeId, stageId, sourceScenarioId, userId, label, description }) {
+  const { data: sourceLines, error } = await supabase
+    .from('budget_stage_lines')
+    .select('account_id, amount, source_type, source_ref_id, notes')
+    .eq('scenario_id', sourceScenarioId)
+  if (error) throw error
+
+  const finalLabel = label || (await nextScenarioLabel(ayeId, stageId))
+  const scenarioId = await insertScenario({
+    ayeId, stageId, label: finalLabel, description, userId,
+  })
+
+  const lines = (sourceLines || []).map((l) => ({
+    scenario_id: scenarioId,
+    account_id: l.account_id,
+    amount: Number(l.amount) || 0,
+    source_type: l.source_type,
+    source_ref_id: l.source_ref_id ?? null,
+    notes: l.notes ?? null,
+    created_by: userId ?? null,
+    updated_by: userId ?? null,
+  }))
+
+  await insertLines(lines)
+
+  return { scenarioId, importedCount: lines.length }
+}
+
+// Posting non-pass-thru active accounts. Used by Start-with-$0 and the
+// auto-detect notification.
 export async function fetchBudgetableAccounts() {
   const { data, error } = await supabase
     .from('chart_of_accounts')
@@ -88,49 +115,13 @@ export async function fetchBudgetableAccounts() {
   return data || []
 }
 
-// Path 4 (multi-scenario): Copy from an existing scenario in the same
-// AYE. Used by "+ New scenario" when the user wants a small-diff
-// alternate (e.g., "with HS" vs. "without HS") that starts from the
-// base scenario rather than from $0. Notes copy over too; the
-// recommendation marker does NOT (only one scenario per AYE should
-// carry the marker — selecting "+ New from current" doesn't transfer it).
-export async function createScenarioFromCurrent({ ayeId, sourceScenarioId, userId, label, description }) {
-  const { data: sourceLines, error } = await supabase
-    .from('preliminary_budget_lines')
-    .select('account_id, amount, source_type, source_ref_id, notes')
-    .eq('scenario_id', sourceScenarioId)
-  if (error) throw error
-
-  const finalLabel = label || (await nextScenarioLabel(ayeId))
-  const scenarioId = await insertScenario({
-    ayeId, label: finalLabel, description, userId,
-  })
-
-  const lines = (sourceLines || []).map((l) => ({
-    scenario_id: scenarioId,
-    account_id: l.account_id,
-    amount: Number(l.amount) || 0,
-    // source_type carries forward — auto-pulled rows in the source
-    // remain auto-pulled in the copy. source_ref_id and notes copy too.
-    source_type: l.source_type,
-    source_ref_id: l.source_ref_id ?? null,
-    notes: l.notes ?? null,
-    created_by: userId ?? null,
-    updated_by: userId ?? null,
-  }))
-
-  await insertLines(lines)
-
-  return { scenarioId, importedCount: lines.length }
-}
-
 // Path 1: Start with $0.
-export async function createBlankScenario({ ayeId, userId, label, description }) {
+export async function createBlankScenario({ ayeId, stageId, userId, label, description }) {
   const accounts = await fetchBudgetableAccounts()
 
-  const finalLabel = label || (await nextScenarioLabel(ayeId))
+  const finalLabel = label || (await nextScenarioLabel(ayeId, stageId))
   const scenarioId = await insertScenario({
-    ayeId, label: finalLabel, description, userId,
+    ayeId, stageId, label: finalLabel, description, userId,
   })
 
   const lines = accounts.map((a) => ({
@@ -147,13 +138,18 @@ export async function createBlankScenario({ ayeId, userId, label, description })
   return { scenarioId, importedCount: lines.length }
 }
 
-// Find the most recent locked budget snapshot for a *prior* AYE. Looks at
-// both preliminary and final snapshots; prefers final if both exist for the
-// same prior AYE. Returns null when no eligible snapshot exists.
-export async function findPriorLockedBudgetSnapshot(currentAyeId) {
-  // Pull the AYEs ordered by start_date desc; the current AYE is the
-  // pivot — anything older is "prior". This gives us a stable ordering
-  // independent of when the snapshot was actually locked.
+// Find the most recent locked budget snapshot for a *prior* AYE.
+// Strategy: same-stage match first (workflow stages persist across AYEs
+// because workflows are per-module-per-school, not per-AYE), then fall
+// back to any-stage match if no same-stage prior exists.
+//
+// Returns:
+//   { snapshot, aye, stage_match: 'same' | 'any' } | null
+//
+// The stage_match field tells the caller which path was used so the UI
+// can surface "Copy from AYE 2026 Preliminary Budget" vs. "Copy from
+// AYE 2026 Final Budget (no prior Preliminary exists)".
+export async function findPriorLockedBudgetSnapshot(currentAyeId, currentStageId) {
   const { data: ayes, error: ayeErr } = await supabase
     .from('academic_years')
     .select('id, label, start_date')
@@ -161,34 +157,50 @@ export async function findPriorLockedBudgetSnapshot(currentAyeId) {
   if (ayeErr) throw ayeErr
 
   const pivotIdx = (ayes || []).findIndex((a) => a.id === currentAyeId)
-  // No current AYE in list → no prior exists.
   if (pivotIdx === -1) return null
   const priorAyes = ayes.slice(pivotIdx + 1)
   if (priorAyes.length === 0) return null
 
+  // Pass 1: same-stage match. Walk prior AYEs newest-to-oldest; for
+  // each, look for a locked snapshot whose stage_id matches the
+  // current stage.
+  if (currentStageId) {
+    for (const aye of priorAyes) {
+      const { data: snaps, error: snapErr } = await supabase
+        .from('budget_snapshots')
+        .select('id, stage_id, stage_display_name_at_lock, scenario_label, locked_at, aye_id')
+        .eq('aye_id', aye.id)
+        .eq('stage_id', currentStageId)
+        .order('locked_at', { ascending: false })
+        .limit(1)
+      if (snapErr) throw snapErr
+      if (snaps && snaps.length > 0) {
+        return { snapshot: snaps[0], aye, stage_match: 'same' }
+      }
+    }
+  }
+
+  // Pass 2: any-stage match. The user gets *some* starting numbers
+  // even if the same-stage prior doesn't exist. UI surfaces which
+  // stage was used.
   for (const aye of priorAyes) {
     const { data: snaps, error: snapErr } = await supabase
       .from('budget_snapshots')
-      .select('id, snapshot_type, scenario_label, locked_at, aye_id')
+      .select('id, stage_id, stage_display_name_at_lock, scenario_label, locked_at, aye_id')
       .eq('aye_id', aye.id)
-      .order('snapshot_type', { ascending: false })  // 'preliminary' < 'final' alphabetically; desc puts final first
       .order('locked_at', { ascending: false })
       .limit(1)
     if (snapErr) throw snapErr
     if (snaps && snaps.length > 0) {
-      return { snapshot: snaps[0], aye }
+      return { snapshot: snaps[0], aye, stage_match: 'any' }
     }
   }
 
   return null
 }
 
-// Path 2: Bootstrap from prior AYE. Copies lines from a prior snapshot,
-// mapping accounts back into the current COA by code (preferred) or by
-// name (fallback). Skipped accounts are returned so the caller can
-// surface "X accounts from the prior budget are no longer in your COA."
-export async function createScenarioFromPriorAye({ ayeId, userId, label, description, priorSnapshotId }) {
-  // Pull the snapshot lines and the current-COA mapping in parallel.
+// Path 2: Bootstrap from prior AYE.
+export async function createScenarioFromPriorAye({ ayeId, stageId, userId, label, description, priorSnapshotId }) {
   const [linesResult, accountsResult] = await Promise.all([
     supabase
       .from('budget_snapshot_lines')
@@ -204,8 +216,6 @@ export async function createScenarioFromPriorAye({ ayeId, userId, label, descrip
   const snapshotLines = linesResult.data || []
   const accounts = accountsResult.data || []
 
-  // Build code and name lookups, scoped to *eligible* accounts only
-  // (posting, non-pass-thru, active). Match by code first, then by name.
   const eligible = accounts.filter(
     (a) => a.posts_directly && !a.is_pass_thru && a.is_active
   )
@@ -220,8 +230,6 @@ export async function createScenarioFromPriorAye({ ayeId, userId, label, descrip
   const skipped = []
 
   for (const sl of snapshotLines) {
-    // Pass-thru lines shouldn't appear in snapshots (validation prevents it),
-    // but if they do somehow, skip — they don't belong in operating budgets.
     if (sl.is_pass_thru) {
       skipped.push(sl.account_name)
       continue
@@ -235,17 +243,12 @@ export async function createScenarioFromPriorAye({ ayeId, userId, label, descrip
     matched.push({ accountId: acct.id, amount: Number(sl.amount) || 0 })
   }
 
-  // De-dup matched by accountId in case the snapshot somehow has dupes
-  // OR two different prior names mapped to the same current account.
   const uniqueByAccount = new Map()
-  for (const m of matched) {
-    // Last write wins; arbitrary but deterministic given source order.
-    uniqueByAccount.set(m.accountId, m.amount)
-  }
+  for (const m of matched) uniqueByAccount.set(m.accountId, m.amount)
 
-  const finalLabel = label || (await nextScenarioLabel(ayeId))
+  const finalLabel = label || (await nextScenarioLabel(ayeId, stageId))
   const scenarioId = await insertScenario({
-    ayeId, label: finalLabel, description, userId,
+    ayeId, stageId, label: finalLabel, description, userId,
   })
 
   const linesToInsert = [...uniqueByAccount.entries()].map(
@@ -268,14 +271,11 @@ export async function createScenarioFromPriorAye({ ayeId, userId, label, descrip
   }
 }
 
-// CSV row shape coming in from the parse + validate pipeline:
-//   { accountId, amount, notes? }
-// Caller has already mapped account_code → accountId and validated that
-// the account is posting + non-pass-thru + active.
-export async function createScenarioFromCsvRows({ ayeId, userId, label, description, rows }) {
-  const finalLabel = label || (await nextScenarioLabel(ayeId))
+// Path 3: CSV.
+export async function createScenarioFromCsvRows({ ayeId, stageId, userId, label, description, rows }) {
+  const finalLabel = label || (await nextScenarioLabel(ayeId, stageId))
   const scenarioId = await insertScenario({
-    ayeId, label: finalLabel, description, userId,
+    ayeId, stageId, label: finalLabel, description, userId,
   })
 
   const linesToInsert = rows.map((r) => ({
@@ -294,15 +294,10 @@ export async function createScenarioFromCsvRows({ ayeId, userId, label, descript
 }
 
 // Reset a scenario back to empty state (delete all its lines so the
-// empty-state prompt re-renders). The scenario row itself is preserved
-// so its label / description / state survive — the user is "starting
-// over" inside the same scenario, not creating a new one.
-//
-// Rejected if scenario is locked (the trigger will catch it but we
-// short-circuit here for a friendlier error).
+// empty-state prompt re-renders). The scenario row itself is preserved.
 export async function resetScenario(scenarioId) {
   const { data: scenario, error: fetchErr } = await supabase
-    .from('preliminary_budget_scenarios')
+    .from('budget_stage_scenarios')
     .select('state')
     .eq('id', scenarioId)
     .single()
@@ -313,7 +308,7 @@ export async function resetScenario(scenarioId) {
     )
   }
   const { error } = await supabase
-    .from('preliminary_budget_lines')
+    .from('budget_stage_lines')
     .delete()
     .eq('scenario_id', scenarioId)
   if (error) throw error

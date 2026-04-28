@@ -9,7 +9,7 @@ import Brand from './pages/admin/settings/Brand'
 import Financial from './pages/admin/settings/Financial'
 import ModuleConfiguration from './pages/admin/settings/ModuleConfiguration'
 import TuitionWorksheet from './pages/modules/TuitionWorksheet'
-import PreliminaryBudget from './pages/modules/PreliminaryBudget'
+import BudgetStage from './pages/modules/BudgetStage'
 import ProtectedRoute from './lib/ProtectedRoute'
 
 function App() {
@@ -83,10 +83,10 @@ function App() {
           }
         />
         <Route
-          path="/modules/preliminary-budget"
+          path="/modules/budget/:stageId"
           element={
             <ProtectedRoute>
-              <PreliminaryBudget />
+              <BudgetStage />
             </ProtectedRoute>
           }
         />
