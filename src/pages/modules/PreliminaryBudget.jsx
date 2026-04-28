@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthProvider'
@@ -7,8 +7,12 @@ import {
   createBlankScenario,
   createScenarioFromCsvRows,
   createScenarioFromPriorAye,
-  resetScenario,
 } from '../../lib/budgetBootstrap'
+import {
+  buildBudgetTree,
+  computeKpis,
+  findUnbudgetedAccounts,
+} from '../../lib/budgetTree'
 import AppShell from '../../components/AppShell'
 import AYESelector from '../../components/AYESelector'
 import Breadcrumb from '../../components/Breadcrumb'
@@ -16,24 +20,25 @@ import Badge from '../../components/Badge'
 import KpiSidebar from '../../components/budget/KpiSidebar'
 import BudgetEmptyState from '../../components/budget/BudgetEmptyState'
 import CsvImportModal from '../../components/budget/CsvImportModal'
+import BudgetDetailZone from '../../components/budget/BudgetDetailZone'
+import AutoDetectBanner from '../../components/budget/AutoDetectBanner'
+import AddAccountModal from '../../components/budget/AddAccountModal'
 
 // Preliminary Budget — three-zone shell (header + KPI sidebar + detail).
 //
-// Commit B (this commit) ships:
-//   - sticky header with breadcrumb, AYE selector, scenario state badge,
-//     placeholder action buttons, and a kebab menu with "Reset scenario"
-//   - KPI sidebar shell (real numbers land in Commit C)
-//   - empty state with three start options when the AYE has no scenario
-//   - bootstrap flows (Start with $0, Upload CSV, Bootstrap from prior AYE)
+// Commit B shipped: bootstrap flow (Start with $0 / Upload CSV /
+// Bootstrap from prior AYE), the three-zone shell, KPI sidebar
+// scaffold, and a placeholder detail card.
 //
-// Commit C wires the real detail view, real KPI math, inline COA add,
-// auto-detect banner, and direct-edit-with-undo. The placeholder detail
-// for now is a small "scenario loaded — detail view lands in Commit C"
-// card so the bootstrap flow's success state is visually meaningful
-// without overpromising what's wired up.
+// Commit C (this commit) wires:
+//   - real KPI computation in the sidebar
+//   - hierarchical Display Style A render in the detail zone with
+//     direct-edit-with-undo on amount cells (Tab/Shift+Tab/Esc/Cmd+Z)
+//   - auto-detect banner: accounts in COA but not in this budget
+//   - inline add-account (Pattern 1): same AccountForm as COA mgmt
 //
-// Multi-scenario tabs land in Commit D; this version assumes a single
-// scenario per AYE and just picks the first one returned.
+// Commit D adds multi-scenario tabs; for now the page assumes one
+// scenario per AYE.
 
 const STATE_BADGES = {
   drafting: { label: 'DRAFTING', variant: 'navy' },
@@ -48,22 +53,33 @@ function StateBadge({ state }) {
   return <Badge variant={cfg.variant}>{cfg.label}</Badge>
 }
 
-// The header zone renders sticky at the top of the working area: breadcrumb
-// + page title with state badge, AYE selector, and the action affordances.
-// Action buttons are wired to no-ops in Commit B; Commits D / E / F /
-// (PDF) replace them with real handlers.
+function ActionButton({ label, disabled, primary, onClick }) {
+  const base =
+    'border-[0.5px] px-3.5 py-2 rounded text-sm font-body transition-colors'
+  const cls = disabled
+    ? 'border-card-border bg-white/50 text-muted/60 cursor-not-allowed'
+    : primary
+      ? 'border-navy bg-navy text-gold hover:opacity-90 cursor-pointer'
+      : 'border-card-border bg-white text-navy hover:bg-cream-highlight cursor-pointer'
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${cls}`}>
+      {label}
+    </button>
+  )
+}
+
 function HeaderZone({
   ayeLabel,
   selectedAyeId,
   onAyeChange,
   scenario,
   onResetClick,
+  onAddAccountClick,
   resetting,
+  canEdit,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
 
-  // Close kebab on outside click. A real popper would be nicer; this is a
-  // single-item menu so the simple click-the-document handler is fine.
   useEffect(() => {
     if (!menuOpen) return
     function close() { setMenuOpen(false) }
@@ -86,10 +102,10 @@ function HeaderZone({
         <div className="flex items-end gap-3 flex-wrap">
           <AYESelector value={selectedAyeId} onChange={onAyeChange} />
 
-          {/* Action buttons. Disabled affordances in Commit B; full wire-up
-              lands across Commits C–F. Rendered now so the layout doesn't
-              shift when functionality arrives. */}
           <div className="flex items-center gap-2">
+            {scenario && canEdit && (
+              <ActionButton label="+ Add Account" onClick={onAddAccountClick} />
+            )}
             <ActionButton disabled label="Save" />
             <ActionButton disabled label="View PDF" />
             <ActionButton disabled label="Submit for Lock Review" primary />
@@ -138,57 +154,6 @@ function HeaderZone({
   )
 }
 
-function ActionButton({ label, disabled, primary, onClick }) {
-  const base =
-    'border-[0.5px] px-3.5 py-2 rounded text-sm font-body transition-colors'
-  const cls = disabled
-    ? 'border-card-border bg-white/50 text-muted/60 cursor-not-allowed'
-    : primary
-      ? 'border-navy bg-navy text-gold hover:opacity-90 cursor-pointer'
-      : 'border-card-border bg-white text-navy hover:bg-cream-highlight cursor-pointer'
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${cls}`}>
-      {label}
-    </button>
-  )
-}
-
-// Placeholder for the detail zone. Commit C replaces this with the
-// hierarchical Display Style A render + direct-edit-with-undo. Showing
-// something concrete here makes the bootstrap success state legible
-// even though the real editing isn't wired yet.
-function DetailZonePlaceholder({ scenario, lineCount }) {
-  return (
-    <div className="px-2 py-6">
-      <div className="bg-white border-[0.5px] border-card-border rounded-[10px] px-6 py-8 max-w-2xl">
-        <div className="flex items-baseline gap-3 mb-2">
-          <h2 className="font-display text-navy text-[20px] leading-tight">
-            {scenario.scenario_label}
-          </h2>
-          {scenario.is_recommended && (
-            <Badge variant="navy">Recommended</Badge>
-          )}
-        </div>
-        {scenario.description && (
-          <p className="font-body italic text-muted text-sm mb-4">
-            {scenario.description}
-          </p>
-        )}
-        <p className="font-body text-body text-sm mb-2">
-          Scenario created with <strong>{lineCount}</strong> budget line
-          {lineCount === 1 ? '' : 's'}.
-        </p>
-        <p className="font-body italic text-muted text-sm leading-relaxed">
-          The hierarchical detail view, KPI computation, inline COA add, and
-          direct-edit-with-undo are scheduled for the next commit. Use Reset
-          scenario in the menu above to return to the empty state and try
-          another bootstrap path.
-        </p>
-      </div>
-    </div>
-  )
-}
-
 function PreliminaryBudget() {
   const { user } = useAuth()
   const { allowed: canView, loading: permLoading } = useModulePermission(
@@ -199,13 +164,19 @@ function PreliminaryBudget() {
     'preliminary_budget',
     'edit'
   )
+  const { allowed: canEditCoa } = useModulePermission(
+    'chart_of_accounts',
+    'edit'
+  )
 
   const [selectedAyeId, setSelectedAyeId] = useState(null)
   const [aye, setAye] = useState(null)
 
-  // Active scenario for this AYE. null when none exists (empty state).
+  // Live scenario + line + account state. accounts is the full COA;
+  // lines are scoped to the active scenario.
   const [scenario, setScenario] = useState(null)
-  const [lineCount, setLineCount] = useState(0)
+  const [accounts, setAccounts] = useState([])
+  const [lines, setLines] = useState([])
 
   const [dataLoading, setDataLoading] = useState(false)
   const [dataError, setDataError] = useState(null)
@@ -217,85 +188,111 @@ function PreliminaryBudget() {
   const [csvOpen, setCsvOpen] = useState(false)
   const [resetting, setResetting] = useState(false)
 
-  // Load AYE + first scenario for the selected AYE. Scenarios beyond the
-  // first land in Commit D's tab UI; for B we just pick the earliest one.
-  useEffect(() => {
-    if (!selectedAyeId || !canView) return
+  // Add-account modal state.
+  const [addAccountOpen, setAddAccountOpen] = useState(false)
 
-    let mounted = true
-    async function load() {
-      setDataLoading(true)
-      setDataError(null)
-      setBootstrapError(null)
-      setBootstrapNotice(null)
+  // Auto-detect banner: per-session dismiss flag (resets on reload).
+  const [autoDetectDismissed, setAutoDetectDismissed] = useState(false)
 
-      const [ayeResult, scenarioResult] = await Promise.all([
-        supabase
-          .from('academic_years')
-          .select('id, label')
-          .eq('id', selectedAyeId)
-          .single(),
-        supabase
-          .from('preliminary_budget_scenarios')
-          .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf')
-          .eq('aye_id', selectedAyeId)
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle(),
-      ])
+  // In-session undo stack for amount edits. Each entry:
+  //   { accountId, prevAmount }
+  // Cmd+Z pops the latest and writes prevAmount back.
+  const [undoStack, setUndoStack] = useState([])
 
-      if (!mounted) return
+  // Toast-style success message that fades out (handled by clearing on
+  // next action). Used for inline-add success feedback.
+  const [toast, setToast] = useState(null)
 
-      if (ayeResult.error) {
-        setDataError(ayeResult.error.message)
+  // ---- data load -------------------------------------------------------
+
+  const loadAll = useCallback(async (ayeId) => {
+    setDataLoading(true)
+    setDataError(null)
+    setBootstrapError(null)
+    setBootstrapNotice(null)
+
+    const [ayeResult, scenarioResult, accountsResult] = await Promise.all([
+      supabase
+        .from('academic_years')
+        .select('id, label')
+        .eq('id', ayeId)
+        .single(),
+      supabase
+        .from('preliminary_budget_scenarios')
+        .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf')
+        .eq('aye_id', ayeId)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('chart_of_accounts')
+        .select('id, code, name, parent_id, account_type, posts_directly, is_pass_thru, is_active, is_ed_program_dollars, is_contribution, sort_order')
+        .order('sort_order', { ascending: true })
+        .order('code', { ascending: true }),
+    ])
+
+    if (ayeResult.error)      { setDataError(ayeResult.error.message);      setDataLoading(false); return }
+    if (scenarioResult.error) { setDataError(scenarioResult.error.message); setDataLoading(false); return }
+    if (accountsResult.error) { setDataError(accountsResult.error.message); setDataLoading(false); return }
+
+    setAye(ayeResult.data)
+    setScenario(scenarioResult.data || null)
+    setAccounts(accountsResult.data || [])
+
+    if (scenarioResult.data) {
+      const { data: lineRows, error: linesErr } = await supabase
+        .from('preliminary_budget_lines')
+        .select('id, scenario_id, account_id, amount, source_type, notes')
+        .eq('scenario_id', scenarioResult.data.id)
+      if (linesErr) {
+        setDataError(linesErr.message)
         setDataLoading(false)
         return
       }
-      setAye(ayeResult.data)
-
-      if (scenarioResult.error) {
-        setDataError(scenarioResult.error.message)
-        setDataLoading(false)
-        return
-      }
-      setScenario(scenarioResult.data || null)
-
-      if (scenarioResult.data) {
-        const { count, error: countErr } = await supabase
-          .from('preliminary_budget_lines')
-          .select('id', { count: 'exact', head: true })
-          .eq('scenario_id', scenarioResult.data.id)
-        if (!mounted) return
-        if (countErr) {
-          setDataError(countErr.message)
-        } else {
-          setLineCount(count || 0)
-        }
-      } else {
-        setLineCount(0)
-      }
-
-      setDataLoading(false)
+      setLines(lineRows || [])
+    } else {
+      setLines([])
     }
 
-    load()
-    return () => { mounted = false }
-  }, [selectedAyeId, canView])
+    setDataLoading(false)
+  }, [])
 
-  // Bootstrap handlers. Each catches its own errors and surfaces them on
-  // the empty state so the prompt remains visible if creation fails.
+  useEffect(() => {
+    if (!selectedAyeId || !canView) return
+    let mounted = true
+    ;(async () => {
+      await loadAll(selectedAyeId)
+      if (!mounted) return
+    })()
+    return () => { mounted = false }
+  }, [selectedAyeId, canView, loadAll])
+
+  // ---- derived values --------------------------------------------------
+
+  const tree = useMemo(
+    () => buildBudgetTree(accounts, lines),
+    [accounts, lines]
+  )
+
+  const kpis = useMemo(() => {
+    if (!scenario) return null
+    return computeKpis(accounts, lines)
+  }, [accounts, lines, scenario])
+
+  const unbudgeted = useMemo(() => {
+    if (!scenario || autoDetectDismissed) return []
+    return findUnbudgetedAccounts(accounts, lines)
+  }, [accounts, lines, scenario, autoDetectDismissed])
+
+  // ---- bootstrap handlers ----------------------------------------------
+
   async function handleStartBlank() {
     setCreating(true)
     setBootstrapError(null)
     setBootstrapNotice(null)
     try {
-      const result = await createBlankScenario({
-        ayeId: selectedAyeId,
-        userId: user?.id,
-      })
-      // Re-fetch so state badge / line count etc. come from the DB rather
-      // than guessing client-side.
-      await reloadScenario(result.scenarioId)
+      await createBlankScenario({ ayeId: selectedAyeId, userId: user?.id })
+      await loadAll(selectedAyeId)
     } catch (e) {
       setBootstrapError(e.message || String(e))
     } finally {
@@ -323,7 +320,7 @@ function PreliminaryBudget() {
           `${result.skippedNames.length} account(s) from the prior budget are no longer in your Chart of Accounts and were skipped: ${list}${more}.`
         )
       }
-      await reloadScenario(result.scenarioId)
+      await loadAll(selectedAyeId)
     } catch (e) {
       setBootstrapError(e.message || String(e))
     } finally {
@@ -334,44 +331,41 @@ function PreliminaryBudget() {
   async function handleCsvConfirm(rows) {
     setBootstrapError(null)
     setBootstrapNotice(null)
-    const result = await createScenarioFromCsvRows({
+    await createScenarioFromCsvRows({
       ayeId: selectedAyeId,
       userId: user?.id,
       rows,
     })
     setCsvOpen(false)
-    await reloadScenario(result.scenarioId)
+    await loadAll(selectedAyeId)
   }
 
   async function handleResetScenario() {
     if (!scenario) return
     if (!window.confirm(
-      `Reset "${scenario.scenario_label}"? All ${lineCount} line(s) will be deleted ` +
-      `and the scenario will return to the empty start prompt. The scenario ` +
-      `itself (label, description) is preserved.`
+      `Reset "${scenario.scenario_label}"? All ${lines.length} line(s) will be deleted ` +
+      `and the scenario will return to the empty start prompt.`
     )) {
       return
     }
     setResetting(true)
     setDataError(null)
     try {
-      await resetScenario(scenario.id)
-      // Scenario row stays; line count goes to zero. Re-display the empty
-      // state for that scenario so the user can pick a new bootstrap path.
-      // (We achieve this by clearing the local scenario reference — the
-      // empty state component creates a NEW scenario on its next path.
-      // Future Commit D can teach this to restore the existing scenario.)
-      // For Commit B simplicity: drop the scenario row entirely so the
-      // user lands cleanly back at the empty state. That trade-off:
-      // recreating the row loses any description the user typed. Worth
-      // revisiting in D when scenarios are user-named.
-      const { error } = await supabase
+      // Delete lines first (cascade also handles this if we drop the
+      // scenario, but explicit delete makes the audit-log clearer).
+      const { error: linesErr } = await supabase
+        .from('preliminary_budget_lines')
+        .delete()
+        .eq('scenario_id', scenario.id)
+      if (linesErr) throw linesErr
+      const { error: scenarioErr } = await supabase
         .from('preliminary_budget_scenarios')
         .delete()
         .eq('id', scenario.id)
-      if (error) throw error
+      if (scenarioErr) throw scenarioErr
       setScenario(null)
-      setLineCount(0)
+      setLines([])
+      setUndoStack([])
     } catch (e) {
       setDataError(e.message || String(e))
     } finally {
@@ -379,29 +373,95 @@ function PreliminaryBudget() {
     }
   }
 
-  async function reloadScenario(scenarioId) {
-    const { data, error } = await supabase
-      .from('preliminary_budget_scenarios')
-      .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf')
-      .eq('id', scenarioId)
-      .single()
-    if (error) {
-      setBootstrapError(error.message)
-      return
-    }
-    setScenario(data)
-    const { count, error: countErr } = await supabase
+  // ---- editing ---------------------------------------------------------
+
+  // Persist a single amount edit. Optimistic UI: update local state
+  // immediately, then push to DB. On DB error, revert + surface message.
+  // Called from BudgetDetailZone's onSaveAmount and from undo.
+  const handleSaveAmount = useCallback(
+    async (accountId, newAmount, prevAmount, { skipUndoPush = false } = {}) => {
+      // If unchanged, skip the round-trip entirely.
+      if (newAmount === prevAmount) return
+
+      const targetLine = lines.find((l) => l.account_id === accountId)
+      if (!targetLine) {
+        setDataError(`No budget line found for account ${accountId}`)
+        return
+      }
+
+      // Optimistic local update
+      setLines((prev) =>
+        prev.map((l) =>
+          l.id === targetLine.id ? { ...l, amount: newAmount } : l
+        )
+      )
+
+      const { error } = await supabase
+        .from('preliminary_budget_lines')
+        .update({ amount: newAmount, updated_by: user?.id })
+        .eq('id', targetLine.id)
+
+      if (error) {
+        // Revert
+        setLines((prev) =>
+          prev.map((l) =>
+            l.id === targetLine.id ? { ...l, amount: prevAmount } : l
+          )
+        )
+        setDataError(error.message)
+        return
+      }
+
+      if (!skipUndoPush) {
+        setUndoStack((prev) => [...prev, { accountId, prevAmount }])
+      }
+    },
+    [lines, user?.id]
+  )
+
+  const handleUndo = useCallback(async () => {
+    if (undoStack.length === 0) return
+    const last = undoStack[undoStack.length - 1]
+    setUndoStack((prev) => prev.slice(0, -1))
+    const targetLine = lines.find((l) => l.account_id === last.accountId)
+    const currentAmount = targetLine ? Number(targetLine.amount) || 0 : 0
+    await handleSaveAmount(last.accountId, last.prevAmount, currentAmount, {
+      skipUndoPush: true,
+    })
+  }, [undoStack, lines, handleSaveAmount])
+
+  // ---- auto-detect: add selected unbudgeted accounts at $0 -------------
+
+  async function handleAddUnbudgeted(accountIds) {
+    if (!scenario) return
+    const newLines = accountIds.map((id) => ({
+      scenario_id: scenario.id,
+      account_id: id,
+      amount: 0,
+      source_type: 'manual',
+      created_by: user?.id,
+      updated_by: user?.id,
+    }))
+    const { error } = await supabase
       .from('preliminary_budget_lines')
-      .select('id', { count: 'exact', head: true })
-      .eq('scenario_id', scenarioId)
-    if (countErr) {
-      setBootstrapError(countErr.message)
-      return
-    }
-    setLineCount(count || 0)
+      .insert(newLines)
+    if (error) throw error
+    await loadAll(selectedAyeId)
   }
 
-  // ------- render branches ------------------------------------------------
+  // ---- add-account success ---------------------------------------------
+
+  async function handleAddAccountSuccess(message) {
+    setToast(message)
+    // Clear toast after a few seconds; keep the auto-clear simple.
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 5000)
+    await loadAll(selectedAyeId)
+  }
+  const toastTimer = useRef(null)
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
+
+  // ------- render branches ----------------------------------------------
 
   if (permLoading) {
     return (
@@ -431,12 +491,11 @@ function PreliminaryBudget() {
     )
   }
 
+  const readOnly = !canEdit || (scenario && scenario.state !== 'drafting')
+
   return (
     <AppShell>
       <div className="-mx-6 -my-6 flex flex-col h-[calc(100vh-3.5rem)]">
-        {/* Header zone (sticky). The negative margins above pull the zone
-            flush to the AppShell's edges so the sticky header spans the
-            full working-area width. */}
         <div className="px-6">
           <HeaderZone
             ayeLabel={aye?.label}
@@ -444,14 +503,14 @@ function PreliminaryBudget() {
             onAyeChange={setSelectedAyeId}
             scenario={scenario}
             onResetClick={handleResetScenario}
+            onAddAccountClick={() => setAddAccountOpen(true)}
             resetting={resetting}
+            canEdit={canEdit && canEditCoa}
           />
         </div>
 
-        {/* Body: KPI sidebar + detail zone. Detail zone scrolls; sidebar
-            is its own scroll container. */}
         <div className="flex-1 flex overflow-hidden">
-          <KpiSidebar />
+          <KpiSidebar kpis={kpis} />
 
           <div className="flex-1 overflow-y-auto px-6 py-2">
             {dataError && (
@@ -466,6 +525,15 @@ function PreliminaryBudget() {
                 role="status"
               >
                 {bootstrapNotice}
+              </div>
+            )}
+
+            {toast && (
+              <div
+                className="mb-4 px-3 py-2 bg-status-green-bg border-[0.5px] border-status-green/30 rounded text-status-green text-sm"
+                role="status"
+              >
+                {toast}
               </div>
             )}
 
@@ -493,7 +561,25 @@ function PreliminaryBudget() {
                 </p>
               )
             ) : (
-              <DetailZonePlaceholder scenario={scenario} lineCount={lineCount} />
+              <>
+                {!autoDetectDismissed && unbudgeted.length > 0 && (
+                  <AutoDetectBanner
+                    missing={unbudgeted}
+                    onAdd={handleAddUnbudgeted}
+                    sessionDismiss={() => setAutoDetectDismissed(true)}
+                  />
+                )}
+
+                <BudgetDetailZone
+                  tree={tree}
+                  readOnly={readOnly}
+                  onSaveAmount={(accountId, newAmount, prevAmount) =>
+                    handleSaveAmount(accountId, newAmount, prevAmount)
+                  }
+                  onUndo={handleUndo}
+                  undoAvailable={undoStack.length > 0}
+                />
+              </>
             )}
           </div>
         </div>
@@ -504,6 +590,16 @@ function PreliminaryBudget() {
           ayeLabel={aye?.label}
           onCancel={() => setCsvOpen(false)}
           onConfirm={handleCsvConfirm}
+        />
+      )}
+
+      {addAccountOpen && scenario && (
+        <AddAccountModal
+          accounts={accounts}
+          scenarioId={scenario.id}
+          userId={user?.id}
+          onClose={() => setAddAccountOpen(false)}
+          onSuccess={handleAddAccountSuccess}
         />
       )}
     </AppShell>

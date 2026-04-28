@@ -1,23 +1,25 @@
 import { useEffect, useState } from 'react'
 
-// Collapsible KPI sidebar for the Budget module. For Commit B (shell +
-// bootstrap), this renders structure with placeholder "—" values for every
-// KPI; Commit C wires the real computation. The intent is that the
-// component contract (props: {scenarioId, lines}) is stable from B
-// forward, so swapping in real numbers is a one-shot edit to the body of
-// this file rather than a structural change.
+// Collapsible KPI sidebar. Default expanded on screens >= 1200px (per
+// architecture Section 8.1), collapsed otherwise. State persists per-
+// session via localStorage.
 //
-// Default expanded on screens >= 1200px (architecture Section 8.1);
-// collapsed otherwise. State persists per session (not per user) via
-// localStorage; intentional to mirror the sidebar collapsibility pattern
-// established in AppShell.
+// Props:
+//   kpis: {
+//     totalIncome, totalExpense, netIncome,
+//     edProgramDollars, edProgramRatio, contributionsTotal, pctPersonnel
+//   } | null
+//
+// When `kpis` is null (no scenario yet), every value renders as "—".
+// When present, computable values render their numbers; values that
+// require modules that don't exist yet (Number of Students, Cost per
+// Student, etc.) keep their "Pending [Module]" subtitles per Section I
+// of the build spec.
 
 const STORAGE_KEY = 'agora.budget.kpiSidebarCollapsed'
 
 function loadInitialCollapsed() {
   try {
-    // Initial collapse: respect saved preference if any; otherwise
-    // collapse on narrow viewports.
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved === '1') return true
     if (saved === '0') return false
@@ -27,9 +29,27 @@ function loadInitialCollapsed() {
   }
 }
 
-// One KPI row. value is allowed to be a string (so "—" and "$0" can both
-// render); subtitle slot supports the "Pending [Module]" placeholder
-// pattern from Section I of the build spec.
+const usd0 = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0,
+})
+
+const pct1 = new Intl.NumberFormat('en-US', {
+  style: 'percent',
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+})
+
+function fmtUsd(n) {
+  if (n === null || n === undefined) return '—'
+  return usd0.format(n)
+}
+function fmtPct(n) {
+  if (n === null || n === undefined) return '—'
+  return pct1.format(n)
+}
+
 function Kpi({ label, value, subtitle, valueClass = '' }) {
   return (
     <div className="space-y-0.5">
@@ -52,14 +72,14 @@ function Divider() {
   return <div className="border-t-[0.5px] border-white/10 my-4" />
 }
 
-function KpiSidebar() {
+function KpiSidebar({ kpis }) {
   const [collapsed, setCollapsed] = useState(loadInitialCollapsed)
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0')
     } catch {
-      // localStorage unavailable; ignore.
+      // ignore
     }
   }, [collapsed])
 
@@ -82,6 +102,21 @@ function KpiSidebar() {
     )
   }
 
+  // KPI panel rendering. When `kpis` is null, every computed value
+  // collapses to "—" (the formatters handle null). When non-null, the
+  // computed values come straight from the math; the placeholder slots
+  // (Number of Students, Tuition, etc.) keep their static "Pending"
+  // subtitles because they require modules that don't yet exist.
+  const k = kpis || {}
+  const netClass =
+    k.netIncome !== undefined && k.netIncome !== null && k.netIncome < 0
+      ? 'text-status-red-bg'  // light red on dark; visible without screaming
+      : ''
+  const netSubtitle =
+    k.netIncome !== undefined && k.netIncome !== null && k.netIncome < 0
+      ? 'deficit'
+      : null
+
   return (
     <aside className="bg-navy text-white w-[220px] flex-shrink-0 px-5 py-5 overflow-y-auto">
       <div className="flex items-center justify-between mb-4">
@@ -99,23 +134,32 @@ function KpiSidebar() {
       </div>
 
       <div className="space-y-4">
-        <Kpi label="Total Income" value="—" subtitle="Pending budget data" />
-        <Kpi label="Total Expenses" value="—" subtitle="Pending budget data" />
-        <Kpi label="Net Income" value="—" subtitle="Pending budget data" />
+        <Kpi label="Total Income"   value={fmtUsd(k.totalIncome)} />
+        <Kpi label="Total Expenses" value={fmtUsd(k.totalExpense)} />
+        <Kpi
+          label="Net Income"
+          value={fmtUsd(k.netIncome)}
+          valueClass={netClass}
+          subtitle={netSubtitle}
+        />
 
         <Divider />
 
-        <Kpi label="Ed Program $" value="—" subtitle="Pending budget data" />
-        <Kpi label="Ed Program Ratio" value="—" subtitle="Pending Strategic Plan" />
-        <Kpi label="Contributions" value="—" subtitle="Pending budget data" />
-        <Kpi label="% Personnel" value="—" subtitle="Pending budget data" />
+        <Kpi label="Ed Program $" value={fmtUsd(k.edProgramDollars)} />
+        <Kpi
+          label="Ed Program Ratio"
+          value={fmtPct(k.edProgramRatio)}
+          subtitle="Target — Pending Strategic Plan"
+        />
+        <Kpi label="Contributions" value={fmtUsd(k.contributionsTotal)} />
+        <Kpi label="% Personnel"   value={fmtPct(k.pctPersonnel)} />
 
         <Divider />
 
         <Kpi label="Number of Students" value="—" subtitle="Pending Enrollment Estimator" />
-        <Kpi label="Cost per Student" value="—" subtitle="Pending Enrollment Estimator" />
-        <Kpi label="Current Tuition" value="—" subtitle="Pending Tuition Worksheet" />
-        <Kpi label="Tuition Gap" value="—" subtitle="Pending Tuition Worksheet" />
+        <Kpi label="Cost per Student"   value="—" subtitle="Pending Enrollment Estimator" />
+        <Kpi label="Current Tuition"    value="—" subtitle="Pending Tuition Worksheet" />
+        <Kpi label="Tuition Gap"        value="—" subtitle="Pending Tuition Worksheet" />
         <Kpi label="Break-even Enrollment" value="—" subtitle="Pending Tuition Worksheet" />
         <Kpi label="Cash Reserve Months" value="—" subtitle="Pending Cash Flow integration" />
       </div>
