@@ -397,6 +397,8 @@ Chart of Accounts is a permissionable module like the others. Office Manager cas
 
 Lives at **Admin → School Settings → Financial → Chart of Accounts**. Three views: tree (hierarchical), flat (sortable list), import (CSV upload + guided flagging).
 
+Add / Edit / "+ Subaccount" all open the same `AccountForm` React component in modal context — the same form Budget's "+ Add Account" flow uses (Pattern 1). One form, multiple entry points, identical validation. See Section 10.9 for the modal-not-inline-expand principle.
+
 ### 4.10 Worked example (Libertas)
 
 Real Libertas QB structure showing how the posting/summary model handles a parent that posts directly while still containing a summary subtree:
@@ -1345,6 +1347,20 @@ User-facing copy in Agora does not name third-party products by brand. Concepts 
 
 Internal code (variable names like `parseQuickbooks`, comments, JSDoc) may freely reference QuickBooks because that's technical accuracy, not user-facing marketing. The boundary is the rendered string.
 
+### 10.9 Modal-not-inline-expand for row actions
+
+Actions on list rows that require a form (Add, Edit, "+ Subaccount", and similar) open a **modal**, not an inline-expanded panel.
+
+**Rationale**: at scale (a 122-row Chart of Accounts, a 50-line Budget), inline expand pulls the user away from their scroll position. They click Edit on a row deep in the tree, the form expands at the top of the page, and the user has to scroll up to see it — then back down to verify the change landed. Modals anchor focus where the user is already looking and preserve scroll position automatically.
+
+**Implementation pattern**:
+- The form is a single React component (e.g., `AccountForm`). The modal frame is a small wrapper that owns submit/error state and the supabase write; the form is the same instance whether it renders standalone or inside the modal.
+- Backdrop click, Escape key, and an X button in the modal header all close without saving.
+- After save, the modal closes, the parent reloads, and a toast confirms the change. Scroll position is preserved (the parent doesn't unmount).
+- Context-implied fields (e.g., parent set by which row "+ Subaccount" was clicked on) render as a read-only context line, not an editable dropdown — clicking "+ Subaccount" on row 4100 means "subaccount of 4100"; if the user wanted a different parent they'd cancel and use "+ Add Account" from the top.
+
+This is the canonical pattern for COA management's Add / Edit / "+ Subaccount" and Budget's "+ Add Account". Future row-action surfaces should follow.
+
 ---
 
 ## 11. Future Modules (Acknowledged but Not Yet Designed)
@@ -1595,6 +1611,7 @@ Version history:
 - **v1.7** — April 27, 2026 — User-facing copy neutralized: QuickBooks references removed from product narrative (import panel description, helper text on the Account Kind radio, guided-review grid helper text, format-not-recognized error). Technical references in parser implementation and code comments preserved. Format-detected confirmation banner still factually names "QuickBooks Account List format" because it's identification of what was uploaded, not promotional copy. New Section 10.8 codifies the language standard. Sticky column headers added to the guided flag review grid (inner-scroll container with max-height) and the COA Flat view (page-level sticky on `<th>` cells), so the column legend stays visible while scrolling 70+ row charts of accounts.
 - **v1.8** — April 27, 2026 — Sidebar: ACTUALS section added between BUDGET and ADMIN per Section 3.2 with two future-disabled sub-items (Advancement, Cash Flow). All five top-level categories (GOVERNANCE / OPERATIONS / BUDGET / ACTUALS / ADMIN) made collapsible — chevron + label both toggle, smooth `grid-template-rows` transition (200ms), state persisted in `localStorage` (`agora.sidebar.collapsedSections`). Auto-expand on route change so the section containing the active page is always visible in the sidebar. Dashboard remains a top-level link without a parent category. School Settings sub-item expand/collapse pattern (preserved from earlier work) operates independently of the top-level ADMIN toggle.
 - **v2.0** — April 27, 2026 — Conditional hard delete on COA accounts implemented (Migration 007). New Section 4.12 documents the soft-delete (Deactivate) vs hard-delete distinction. The DB function `chart_of_accounts_can_hard_delete(account_id)` returns both a boolean and a human-readable blocking reason; the UI hides the Delete button when the account isn't safe and surfaces the reason via a hover (i) icon next to Deactivate. RLS policy split: `coa_insert` and `coa_update` keep the edit-permission gate (so soft-delete still works at edit level), `coa_delete` requires `admin`. Hard-delete audit logging is automatic via the existing change_log trigger. Function body is structured to extend as Phase 2+ modules add FK references to `chart_of_accounts`.
+- **v2.1** — April 27, 2026 — COA management UI polish. Add / Edit / "+ Subaccount" interactions converted from inline expand to modal, mirroring Budget's "+ Add Account" pattern — same `AccountForm` React component opened in modal context. New Section 10.9 codifies the modal-not-inline-expand principle for row actions at scale. Tree-row layout restructured into fixed-width zones (metadata, type+status, actions) so the right edge stays aligned across 100+ rows; metadata zone surfaces the most informative governance flag with a "+N" + tooltip when multiple are set, instead of the prior inline pill stack. (i) info icon next to Deactivate recolored from muted-red to muted-navy with hover-to-navy treatment — informational, not destructive. AccountForm gained a `parentLocked` prop so the "+ Subaccount" entry path renders the parent as a read-only context line instead of an editable dropdown. No schema or business-logic changes.
 
 ---
 

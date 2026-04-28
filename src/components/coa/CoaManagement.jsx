@@ -6,8 +6,7 @@ import { useModulePermission } from '../../lib/usePermission'
 import Card from '../Card'
 import Badge from '../Badge'
 import SectionLabel from '../SectionLabel'
-import FieldLabel from '../FieldLabel'
-import AccountForm from './AccountForm'
+import CoaAccountModal from './CoaAccountModal'
 import ImportExportPanel from './ImportExportPanel'
 
 // Trigger error messages still use older "parent / child / cycle" wording.
@@ -81,15 +80,84 @@ function FlagDisplay({ account }) {
   )
 }
 
-// "summary" tag rendered inline after a summary account's name in the tree,
-// preceded by a middot separator. Italic muted text reads as descriptive
-// metadata — kind, not status — so no colored badge.
+// "summary" tag — italic muted text reads as descriptive metadata
+// (kind, not status), so no colored badge.
 function SummaryIndicator() {
   return (
-    <>
-      <span className="text-muted/60 text-[13px]" aria-hidden="true">·</span>
-      <span className="text-[12px] text-muted italic">summary</span>
-    </>
+    <span className="text-[12px] text-muted italic">summary</span>
+  )
+}
+
+// Tree-row metadata zone. Shows ONE indicator (whichever applies) so
+// the right-side column reads cleanly across 100+ rows. Priority:
+// pass-thru → ed program → contribution; falls back to "summary" tag
+// for summary accounts; empty for plain posting accounts so the column
+// width is preserved without visual clutter.
+function TreeMetadataCell({ account }) {
+  const flagCount =
+    (account.is_pass_thru ? 1 : 0) +
+    (account.is_ed_program_dollars ? 1 : 0) +
+    (account.is_contribution ? 1 : 0)
+  const primary = account.is_pass_thru
+    ? 'PASS-THRU'
+    : account.is_ed_program_dollars
+      ? 'ED $'
+      : account.is_contribution
+        ? 'CONTRIB'
+        : null
+  // Tooltip lists every set flag when more than one is set, so the
+  // user can hover to see what was elided.
+  const tooltip = flagCount > 1
+    ? [
+        account.is_pass_thru ? 'Pass-Thru' : null,
+        account.is_ed_program_dollars ? 'Ed Program $' : null,
+        account.is_contribution ? 'Contribution' : null,
+      ].filter(Boolean).join(', ')
+    : undefined
+  return (
+    <div
+      className="w-[100px] flex items-center justify-end gap-1 flex-shrink-0"
+      title={tooltip}
+    >
+      {!account.posts_directly ? (
+        <SummaryIndicator />
+      ) : primary ? (
+        <>
+          <FlagPill label={primary} />
+          {flagCount > 1 && (
+            <span className="text-muted/70 text-[10px]">+{flagCount - 1}</span>
+          )}
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+// Tree-row "type + active" zone. Income/Expense badge on every row;
+// Inactive badge stacks on inactive accounts. Fixed width preserves
+// alignment whether or not the inactive badge renders.
+function TreeTypeCell({ account }) {
+  return (
+    <div className="w-[110px] flex items-center gap-1.5 flex-shrink-0">
+      <Badge variant={account.account_type === 'income' ? 'navy' : 'amber'}>
+        {account.account_type === 'income' ? 'Income' : 'Expense'}
+      </Badge>
+      {!account.is_active && <Badge variant="red">Inactive</Badge>}
+    </div>
+  )
+}
+
+// One slot inside the actions zone. Fixed width so the same-named
+// action sits in the same position across rows. Accepts children =
+// the action button (or null for a placeholder slot).
+function ActionSlot({ width, align = 'right', children }) {
+  return (
+    <div
+      className={`flex-shrink-0 ${align === 'right' ? 'text-right' : align === 'left' ? 'text-left' : 'text-center'}`}
+      style={{ width }}
+    >
+      {children}
+    </div>
   )
 }
 
@@ -109,7 +177,7 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
   return (
     <>
       <div
-        className={`flex items-center gap-2 py-2 pr-3 border-b-[0.5px] border-card-border hover:bg-cream-highlight ${!node.is_active ? 'opacity-50' : ''}`}
+        className={`flex items-center gap-3 py-2 pr-3 border-b-[0.5px] border-card-border hover:bg-cream-highlight ${!node.is_active ? 'opacity-50' : ''}`}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
       >
         <button
@@ -131,50 +199,79 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
 
         <span className="font-body text-body flex-1 min-w-0 truncate">{node.name}</span>
 
-        {!node.posts_directly && <SummaryIndicator />}
+        {/* Right-side fixed-width zones: metadata, type+status, actions.
+            Each zone preserves its width whether or not it has content,
+            so the right edge of the tree stays aligned across rows. */}
+        <TreeMetadataCell account={node} />
 
-        <FlagDisplay account={node} />
+        <TreeTypeCell account={node} />
 
-        <Badge variant={node.account_type === 'income' ? 'navy' : 'amber'}>
-          {node.account_type === 'income' ? 'Income' : 'Expense'}
-        </Badge>
-
-        {!node.is_active && <Badge variant="red">Inactive</Badge>}
-
-        <div className="flex gap-3 text-[12px] flex-shrink-0">
-          {canEdit && node.is_active && (
-            <>
-              <button onClick={() => onAdd(node.id)} className="text-status-blue hover:underline">+ Subaccount</button>
-              <button onClick={() => onEdit(node)} className="text-status-blue hover:underline">Edit</button>
-            </>
-          )}
-          {canEdit && !node.is_active && (
-            <button onClick={() => onEdit(node)} className="text-status-blue hover:underline">Edit</button>
-          )}
-          {canApprove && (
-            node.is_active ? (
-              <button onClick={() => onDeactivate(node)} className="text-status-red hover:underline">Deactivate</button>
-            ) : (
-              <button onClick={() => onReactivate(node)} className="text-status-blue hover:underline">Reactivate</button>
-            )
-          )}
-          {showCannotDeleteHint && (
-            <span
-              title={`Cannot delete: Account has ${node.children.length} subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
-              aria-label="Why can't I delete this?"
-              className="text-muted/70 text-[12px] cursor-help select-none"
-            >
-              (i)
-            </span>
-          )}
-          {showDelete && (
-            <button
-              onClick={() => onDelete(node)}
-              className="text-status-red hover:underline"
-            >
-              Delete…
-            </button>
-          )}
+        {/* Actions zone: fixed-width slots with consistent positions.
+            Property indicators (badges) above are visually distinct
+            from the action verbs here — buttons use blue/red text
+            links, not filled buttons, so the eye doesn't conflate
+            "what this row IS" with "what I can DO with it." */}
+        <div className="flex items-center justify-end gap-3 text-[12px] flex-shrink-0 w-[280px]">
+          <ActionSlot width="84px">
+            {canEdit && node.is_active ? (
+              <button
+                onClick={() => onAdd(node.id)}
+                className="text-status-blue hover:underline"
+              >
+                + Subaccount
+              </button>
+            ) : null}
+          </ActionSlot>
+          <ActionSlot width="32px">
+            {canEdit ? (
+              <button
+                onClick={() => onEdit(node)}
+                className="text-status-blue hover:underline"
+              >
+                Edit
+              </button>
+            ) : null}
+          </ActionSlot>
+          <ActionSlot width="74px">
+            {canApprove ? (
+              node.is_active ? (
+                <button
+                  onClick={() => onDeactivate(node)}
+                  className="text-status-red hover:underline"
+                >
+                  Deactivate
+                </button>
+              ) : (
+                <button
+                  onClick={() => onReactivate(node)}
+                  className="text-status-blue hover:underline"
+                >
+                  Reactivate
+                </button>
+              )
+            ) : null}
+          </ActionSlot>
+          <ActionSlot width="56px">
+            {showDelete ? (
+              <button
+                onClick={() => onDelete(node)}
+                className="text-status-red hover:underline"
+              >
+                Delete…
+              </button>
+            ) : showCannotDeleteHint ? (
+              // Info icon — informational, not destructive. Muted navy
+              // by default; darkens to full navy on hover. Same icon,
+              // same tooltip; just not red.
+              <span
+                title={`Cannot delete: Account has ${node.children.length} subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
+                aria-label="Why can't I delete this?"
+                className="text-muted hover:text-navy text-[12px] cursor-help select-none"
+              >
+                (i)
+              </span>
+            ) : null}
+          </ActionSlot>
         </div>
       </div>
 
@@ -396,7 +493,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
                   <span
                     title={`Cannot delete: Account has subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
                     aria-label="Why can't I delete this?"
-                    className="text-muted/70 text-[12px] cursor-help select-none"
+                    className="text-muted hover:text-navy text-[12px] cursor-help select-none"
                   >
                     (i)
                   </span>
@@ -415,9 +512,10 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
   )
 }
 
-// AccountForm lives in ./AccountForm.jsx — same form is reused by the
-// Preliminary Budget module's inline-add-account flow (Pattern 1). See
-// git history before Phase 2 Commit C for the original inline body.
+// AccountForm lives in ./AccountForm.jsx and renders inside
+// CoaAccountModal here (and inside Budget's AddAccountModal). Add /
+// edit / "+ Subaccount" all open the same form in modal context —
+// see architecture Section 10 (modal-not-inline-expand pattern).
 
 // ---- Main component ------------------------------------------------------
 
@@ -434,11 +532,13 @@ function CoaManagement() {
 
   const [view, setView] = useState('tree')
 
+  // Modal state for add / edit / "+ subaccount" flows. CoaAccountModal
+  // owns its own submitting + error state internally; we just track
+  // mode + context here.
   const [formMode, setFormMode] = useState(null)
   const [formAccount, setFormAccount] = useState(null)
   const [formInitialParentId, setFormInitialParentId] = useState(null)
-  const [formError, setFormError] = useState(null)
-  const [formSubmitting, setFormSubmitting] = useState(false)
+  const [formParentLocked, setFormParentLocked] = useState(false)
 
   const [success, setSuccess] = useState(null)
 
@@ -490,11 +590,14 @@ function CoaManagement() {
     return s
   }, [accounts])
 
+  // Top-level "+ Add Account" button passes no parentId and renders an
+  // unlocked parent dropdown. Row-level "+ Subaccount" passes the row's
+  // id and locks the parent (the user picked a row deliberately).
   function openAdd(parentId = null) {
     setFormMode('add')
     setFormAccount(null)
     setFormInitialParentId(parentId)
-    setFormError(null)
+    setFormParentLocked(parentId !== null)
     setSuccess(null)
   }
 
@@ -502,7 +605,7 @@ function CoaManagement() {
     setFormMode('edit')
     setFormAccount(account)
     setFormInitialParentId(null)
-    setFormError(null)
+    setFormParentLocked(false)
     setSuccess(null)
   }
 
@@ -510,37 +613,18 @@ function CoaManagement() {
     setFormMode(null)
     setFormAccount(null)
     setFormInitialParentId(null)
-    setFormError(null)
+    setFormParentLocked(false)
   }
 
-  async function handleSubmit(values) {
-    setFormError(null)
-    setFormSubmitting(true)
-
-    let result
-    if (formMode === 'add') {
-      result = await supabase
-        .from('chart_of_accounts')
-        .insert({ ...values, created_by: user?.id, updated_by: user?.id })
-        .select()
-        .single()
-    } else {
-      result = await supabase
-        .from('chart_of_accounts')
-        .update({ ...values, updated_by: user?.id })
-        .eq('id', formAccount.id)
-        .select()
-        .single()
-    }
-
-    setFormSubmitting(false)
-
-    if (result.error) {
-      setFormError(translateError(result.error.message))
-      return
-    }
-
-    setSuccess(formMode === 'add' ? `Added ${values.name}.` : `Updated ${values.name}.`)
+  // Modal calls this after a successful supabase write. The modal owns
+  // the submitting state and error display; we just close it, surface
+  // the toast, and reload the tree.
+  function handleFormSuccess(savedAccount, mode) {
+    setSuccess(
+      mode === 'add'
+        ? `Added ${savedAccount.name}.`
+        : `Updated ${savedAccount.name}.`
+    )
     closeForm()
     loadAccounts()
   }
@@ -687,7 +771,7 @@ function CoaManagement() {
         </div>
 
         <div className="flex items-center gap-3">
-          {!formMode && !showImportExport && (
+          {!showImportExport && (
             <button
               type="button"
               onClick={() => setShowImportExport(true)}
@@ -696,7 +780,7 @@ function CoaManagement() {
               Import / Export
             </button>
           )}
-          {canEdit && !formMode && (
+          {canEdit && (
             <button type="button" onClick={() => openAdd()} className={navyBtnCls}>
               + Add Account
             </button>
@@ -715,18 +799,17 @@ function CoaManagement() {
       )}
 
       {formMode && (
-        <div className="mb-6">
-          <AccountForm
-            accounts={accounts}
-            mode={formMode}
-            account={formAccount}
-            initialParentId={formInitialParentId}
-            onSubmit={handleSubmit}
-            onCancel={closeForm}
-            error={formError}
-            submitting={formSubmitting}
-          />
-        </div>
+        <CoaAccountModal
+          accounts={accounts}
+          mode={formMode}
+          account={formAccount}
+          initialParentId={formInitialParentId}
+          parentLocked={formParentLocked}
+          userId={user?.id}
+          onClose={closeForm}
+          onSuccess={handleFormSuccess}
+          translateError={translateError}
+        />
       )}
 
       {success && <p className="text-status-green text-sm mb-4" role="status">{success}</p>}

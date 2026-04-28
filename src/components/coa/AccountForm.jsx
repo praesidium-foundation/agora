@@ -14,6 +14,11 @@ import FieldLabel from '../FieldLabel'
 //   mode                — 'add' | 'edit'
 //   account             — the account being edited (mode='edit') or null
 //   initialParentId     — preselect this parent in the dropdown (mode='add')
+//   parentLocked        — when true, the parent dropdown renders disabled
+//                          and a "Subaccount of: <name>" context line shows
+//                          instead of the editable select. Used by the
+//                          "+ Subaccount" entry path where the parent is
+//                          implied by which row the user clicked.
 //   onSubmit(values)    — async; values shape matches the row insert
 //   onCancel()
 //   error               — string to surface above the buttons
@@ -56,7 +61,7 @@ function getDescendantIds(accountId, accounts) {
   return result
 }
 
-function AccountForm({ accounts, mode, account, initialParentId, onSubmit, onCancel, error, submitting }) {
+function AccountForm({ accounts, mode, account, initialParentId, parentLocked = false, onSubmit, onCancel, error, submitting }) {
   const isEdit = mode === 'edit'
 
   const initialParent = initialParentId ? accounts.find((a) => a.id === initialParentId) : null
@@ -156,24 +161,43 @@ function AccountForm({ accounts, mode, account, initialParentId, onSubmit, onCan
     })
   }
 
+  // When the entry path implies a fixed parent (e.g. user clicked
+  // "+ Subaccount" on a tree row), the dropdown renders disabled and
+  // we surface a small read-only context line above it. The user can
+  // cancel and pick "+ Add Account" from the top of the page if they
+  // wanted a different parent.
+  const lockedParentAccount = parentLocked && parentId
+    ? accountById.get(parentId)
+    : null
+
   return (
     <Card title={isEdit ? `Edit ${account?.name || 'account'}` : 'Add account'}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <FieldLabel htmlFor="coa-parent">Subaccount of</FieldLabel>
-          <select
-            id="coa-parent"
-            value={parentId}
-            onChange={(e) => handleParentChange(e.target.value)}
-            className={inputCls}
-          >
-            <option value="">(none — top-level account)</option>
-            {parentOptions.map((a) => (
-              <option key={a.id} value={a.id}>
-                {'– '.repeat(getDepth(a))}{a.code ? `${a.code} · ` : ''}{a.name}
-              </option>
-            ))}
-          </select>
+          {lockedParentAccount ? (
+            <div className="bg-cream-highlight border-[0.5px] border-card-border rounded px-3 py-2 text-sm text-body">
+              {lockedParentAccount.code ? `${lockedParentAccount.code} · ` : ''}
+              {lockedParentAccount.name}
+              <p className="font-body italic text-muted text-xs mt-1">
+                Set by the row you clicked. Cancel and use "+ Add Account" at the top to pick a different parent.
+              </p>
+            </div>
+          ) : (
+            <select
+              id="coa-parent"
+              value={parentId}
+              onChange={(e) => handleParentChange(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">(none — top-level account)</option>
+              {parentOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {'– '.repeat(getDepth(a))}{a.code ? `${a.code} · ` : ''}{a.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div>
