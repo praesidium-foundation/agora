@@ -88,6 +88,42 @@ export async function fetchBudgetableAccounts() {
   return data || []
 }
 
+// Path 4 (multi-scenario): Copy from an existing scenario in the same
+// AYE. Used by "+ New scenario" when the user wants a small-diff
+// alternate (e.g., "with HS" vs. "without HS") that starts from the
+// base scenario rather than from $0. Notes copy over too; the
+// recommendation marker does NOT (only one scenario per AYE should
+// carry the marker — selecting "+ New from current" doesn't transfer it).
+export async function createScenarioFromCurrent({ ayeId, sourceScenarioId, userId, label, description }) {
+  const { data: sourceLines, error } = await supabase
+    .from('preliminary_budget_lines')
+    .select('account_id, amount, source_type, source_ref_id, notes')
+    .eq('scenario_id', sourceScenarioId)
+  if (error) throw error
+
+  const finalLabel = label || (await nextScenarioLabel(ayeId))
+  const scenarioId = await insertScenario({
+    ayeId, label: finalLabel, description, userId,
+  })
+
+  const lines = (sourceLines || []).map((l) => ({
+    scenario_id: scenarioId,
+    account_id: l.account_id,
+    amount: Number(l.amount) || 0,
+    // source_type carries forward — auto-pulled rows in the source
+    // remain auto-pulled in the copy. source_ref_id and notes copy too.
+    source_type: l.source_type,
+    source_ref_id: l.source_ref_id ?? null,
+    notes: l.notes ?? null,
+    created_by: userId ?? null,
+    updated_by: userId ?? null,
+  }))
+
+  await insertLines(lines)
+
+  return { scenarioId, importedCount: lines.length }
+}
+
 // Path 1: Start with $0.
 export async function createBlankScenario({ ayeId, userId, label, description }) {
   const accounts = await fetchBudgetableAccounts()
