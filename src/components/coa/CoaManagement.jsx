@@ -257,7 +257,7 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
                 onClick={() => onDelete(node)}
                 className="text-status-red hover:underline"
               >
-                Delete…
+                Delete
               </button>
             ) : showCannotDeleteHint ? (
               // Info icon — informational, not destructive. Muted navy
@@ -500,7 +500,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
                 )}
                 {canAdmin && !parentsWithChildren.has(a.id) && (
                   <button onClick={() => onDelete(a)} className="text-status-red hover:underline">
-                    Delete…
+                    Delete
                   </button>
                 )}
               </td>
