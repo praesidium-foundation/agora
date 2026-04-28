@@ -1523,15 +1523,17 @@ Each phase delivers usable value while building toward the full vision. Specific
 - **Migration 005**: Chart of Accounts posting vs summary model — adds `posts_directly` column, drops the leaf-only flag trigger, replaces with posting-only flag trigger, adds `is_posting_account()` helper. Resolves the leaf-only flaw that prevented flagging parent accounts that post directly (e.g., "Revenue – Tuition" with a "Tuition Discounts" subtree).
 - **Migration 006**: Default privileges for `authenticated` role on `public` schema — `ALTER DEFAULT PRIVILEGES` for tables, sequences, and functions created by `postgres` and `supabase_admin`, plus a catch-up grant on existing objects. Resolves the GRANT discipline class of bug (Migration 004 hit this; 005 worked around it with a per-table grant). Future migrations no longer need explicit per-table grants.
 - **Migration 007**: Conditional hard delete on COA accounts — adds `chart_of_accounts_can_hard_delete(account_id)` function (returns `can_delete` + `blocking_reason`; today checks self-referential subaccount FK, body extends as Phase 2+ tables add FK references). Splits the COA write RLS policy from one `coa_write` (edit-gated) into three: `coa_insert` and `coa_update` (edit-gated; soft-delete still works at edit level), `coa_delete` (admin-gated). Hard-delete audit logging is automatic via the existing `coa_change_log` trigger.
+- **Migration 008**: Annual Rhythm Settings — `school_lock_cascade_rules` table makes the lock-cascade semantic from Section 3.4 per-school configurable (text codes for `module_being_locked` / `required_module`, validated against `modules.code` by trigger; `required_state` text + CHECK; `is_required` distinguishes hard rule from warning-only). Read-gated to authenticated; write-gated to system admin. Audit-logged via `tg_log_changes()`. `change_log_read` policy extended with public-read arm for cascade rules.
+- **Migration 009**: Preliminary Budget refactor — drops the legacy flat `preliminary_budget` and `final_budget` tables (Migration 001) and replaces Preliminary with the scenario + line model: `preliminary_budget_scenarios` (per-AYE multi-scenario header with state machine, narrative, lock metadata), `preliminary_budget_lines` (one row per scenario × COA-account, validated as posting + non-pass-thru via trigger; locked-scenario writes blocked). Adds `budget_snapshots` + `budget_snapshot_lines` (atomic capture at lock; UPDATE blocked by `tg_prevent_snapshot_update`; account state captured by value so snapshots survive post-lock COA changes). Helper `scenario_includes_account()`. Module/perm seeds; RLS gates (read=view, write=edit, snapshot insert=submit_lock); `change_log_read` extended for the four new tables. Seeds Libertas's cascade rules: Preliminary Budget requires Tuition Worksheet locked AND Enrollment Estimator locked. Extends `budget_source_type` enum with `linked_enrollment`. Final Budget tables deferred to a later migration.
 
 ### Migrations needed (per this architecture)
 
-- **Migration 008**: Refactor `preliminary_budget` and `final_budget` for chart-of-accounts FK (validated via `is_posting_account()`), scenario structure
-- **Migration 009**: Strategic Plan schemas (three instruments)
-- **Migration 010**: Snapshot tables for Budget, Tuition, Staffing, Enrollment
-- **Migration 011**: Board Composition + Committees
-- **Migration 012**: Org Acronyms registry, Custom KPI registry
-- **Migration 013**: Module-to-Account mappings
+- **Migration 010**: Strategic Plan schemas (three instruments)
+- **Migration 011**: Snapshot tables for Tuition, Staffing, Enrollment (Budget snapshots shipped in 009)
+- **Migration 012**: Final Budget refactor — scenario + line model paired with Preliminary, sharing the `budget_snapshots` / `budget_snapshot_lines` tables via `snapshot_type = 'final'`
+- **Migration 013**: Board Composition + Committees
+- **Migration 014**: Org Acronyms registry, Custom KPI registry
+- **Migration 015**: Module-to-Account mappings
 - (Additional migrations as build phases progress)
 
 ---
