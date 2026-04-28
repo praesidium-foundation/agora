@@ -20,6 +20,9 @@ dist-ssr
 # Design reference mockup (visual source of truth, not deployed)
 design-reference.html
 
+# Personal correction notes / scratch (kept local, not pushed)
+supabase/CORRECTIONS.txt
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -7,6 +7,23 @@ import Card from '../Card'
 import Badge from '../Badge'
 import SectionLabel from '../SectionLabel'
 import FieldLabel from '../FieldLabel'
+import ImportExportPanel from './ImportExportPanel'
+
+// Trigger error messages still use older "parent / child / cycle" wording.
+// Translate at the UI surface so user-facing copy stays consistent with the
+// QuickBooks-aligned vocabulary. Database column names (parent_id) are
+// unchanged — see CLAUDE.md "COA vocabulary" note.
+function translateError(msg) {
+  if (!msg) return msg
+  return msg
+    .replace(/Reparenting "([^"]+)" would create a cycle\b[^.]*\./i,
+      'Moving "$1" here would create a loop (it would end up nested under itself).')
+    .replace(/Cannot add a child under a flagged account\./gi,
+      'Cannot add a subaccount under a flagged account.')
+    .replace(/its primary "([^"]+)"/gi, 'its primary account "$1"')
+    .replace(/parent's type/gi, 'primary account type')
+    .replace(/parent type/gi, 'primary account type')
+}
 
 const inputCls =
   'w-full bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none'
@@ -152,7 +169,7 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
         <div className="flex gap-3 text-[12px] flex-shrink-0">
           {canEdit && node.is_active && (
             <>
-              <button onClick={() => onAdd(node.id)} className="text-status-blue hover:underline">+ Child</button>
+              <button onClick={() => onAdd(node.id)} className="text-status-blue hover:underline">+ Subaccount</button>
               <button onClick={() => onEdit(node)} className="text-status-blue hover:underline">Edit</button>
             </>
           )}
@@ -324,7 +341,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
     const active = sortBy === col
     return (
       <th
-        className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80 cursor-pointer select-none"
+        className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80 cursor-pointer select-none"
         onClick={() => setSort(col)}
       >
         {label}
@@ -347,15 +364,15 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
     <Card className="!p-0 overflow-hidden">
       <table className="w-full text-sm">
         <thead>
-          <tr className="bg-cream-highlight">
+          <tr>
             <SortableHeader col="code" label="Code" />
             <SortableHeader col="name" label="Name" />
             <SortableHeader col="account_type" label="Type" />
             <SortableHeader col="posts_directly" label="Kind" />
-            <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Parent</th>
-            <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Flags</th>
-            <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Active</th>
-            <th className="px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Actions</th>
+            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Subaccount of</th>
+            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Flags</th>
+            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Active</th>
+            <th className="sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-4 py-3 text-left font-display text-[13px] tracking-[0.08em] uppercase font-normal text-navy/80">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -386,7 +403,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
               <td className="px-4 py-3 text-[12px] space-x-2 whitespace-nowrap">
                 {canEdit && a.is_active && (
                   <>
-                    <button onClick={() => onAdd(a.id)} className="text-status-blue hover:underline">+ Child</button>
+                    <button onClick={() => onAdd(a.id)} className="text-status-blue hover:underline">+ Subaccount</button>
                     <button onClick={() => onEdit(a)} className="text-status-blue hover:underline">Edit</button>
                   </>
                 )}
@@ -529,14 +546,14 @@ function AccountForm({ accounts, mode, account, initialParentId, onSubmit, onCan
     <Card title={isEdit ? `Edit ${account?.name || 'account'}` : 'Add account'}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <FieldLabel htmlFor="coa-parent">Parent</FieldLabel>
+          <FieldLabel htmlFor="coa-parent">Subaccount of</FieldLabel>
           <select
             id="coa-parent"
             value={parentId}
             onChange={(e) => handleParentChange(e.target.value)}
             className={inputCls}
           >
-            <option value="">(top-level)</option>
+            <option value="">(none — top-level account)</option>
             {parentOptions.map((a) => (
               <option key={a.id} value={a.id}>
                 {'– '.repeat(getDepth(a))}{a.code ? `${a.code} · ` : ''}{a.name}
@@ -559,7 +576,7 @@ function AccountForm({ accounts, mode, account, initialParentId, onSubmit, onCan
           </div>
           {!typeEditable && (
             <p className="text-muted text-xs italic mt-1.5">
-              Type is inherited from the parent account.
+              Type is inherited from the primary account.
             </p>
           )}
         </div>
@@ -578,19 +595,19 @@ function AccountForm({ accounts, mode, account, initialParentId, onSubmit, onCan
               <input type="radio" name="coa-kind" checked={!postsDirectly} onChange={() => setPostsDirectly(false)} className="accent-navy mt-0.5" />
               <span>
                 <span className="font-medium text-body">Summary account</span>
-                <span className="text-muted ml-2">— rollup of children only</span>
+                <span className="text-muted ml-2">— rollup of subaccounts only</span>
               </span>
             </label>
           </div>
           <div className="text-muted text-xs italic mt-1.5 leading-relaxed space-y-1">
             <p>
-              <strong className="font-medium not-italic">Posting</strong> — money posts here in QuickBooks (e.g., individual discount accounts, individual donation accounts).
+              <strong className="font-medium not-italic">Posting</strong> — transactions post directly to this account (e.g., individual discount accounts, individual donation accounts).
             </p>
             <p>
-              <strong className="font-medium not-italic">Summary</strong> — pure rollup; value comes from children (e.g., "Tuition Discounts" as a header that sums its children).
+              <strong className="font-medium not-italic">Summary</strong> — pure rollup; value comes from subaccounts (e.g., "Tuition Discounts" as a header that sums its subaccounts).
             </p>
             <p>
-              A posting account can also have children — its rollup is its direct posts plus children's totals.
+              A posting account can also have subaccounts — its rollup is its direct posts plus subaccount totals.
             </p>
           </div>
         </div>
@@ -726,6 +743,8 @@ function CoaManagement() {
 
   const [success, setSuccess] = useState(null)
 
+  const [showImportExport, setShowImportExport] = useState(false)
+
   // Hard-delete confirmation state. deleteTarget is the account pending
   // confirmation; deleteVerifying covers the RPC safety check before the
   // dialog opens; deleting covers the actual DELETE call.
@@ -743,7 +762,7 @@ function CoaManagement() {
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true })
     if (error) {
-      setDataError(error.message)
+      setDataError(translateError(error.message))
     } else {
       setAccounts(data || [])
     }
@@ -818,7 +837,7 @@ function CoaManagement() {
     setFormSubmitting(false)
 
     if (result.error) {
-      setFormError(result.error.message)
+      setFormError(translateError(result.error.message))
       return
     }
 
@@ -829,7 +848,7 @@ function CoaManagement() {
 
   async function handleDeactivate(account) {
     const ok = window.confirm(
-      `Deactivate "${account.name}"? It will be hidden from selection lists but historical references will be preserved. Children of this account will remain active independently.`
+      `Deactivate "${account.name}"? It will be hidden from selection lists but historical references will be preserved. Subaccounts of this account will remain active independently.`
     )
     if (!ok) return
 
@@ -841,7 +860,7 @@ function CoaManagement() {
       .eq('id', account.id)
 
     if (error) {
-      setDataError(error.message)
+      setDataError(translateError(error.message))
     } else {
       setSuccess(`Deactivated ${account.name}.`)
       loadAccounts()
@@ -857,7 +876,7 @@ function CoaManagement() {
       .eq('id', account.id)
 
     if (error) {
-      setDataError(error.message)
+      setDataError(translateError(error.message))
     } else {
       setSuccess(`Reactivated ${account.name}.`)
       loadAccounts()
@@ -881,7 +900,7 @@ function CoaManagement() {
     setDeleteVerifying(false)
 
     if (error) {
-      setDataError(error.message)
+      setDataError(translateError(error.message))
       return
     }
 
@@ -911,7 +930,7 @@ function CoaManagement() {
     setDeleting(false)
 
     if (error) {
-      setDeleteError(error.message)
+      setDeleteError(translateError(error.message))
       return
     }
 
@@ -968,12 +987,33 @@ function CoaManagement() {
           </button>
         </div>
 
-        {canEdit && !formMode && (
-          <button type="button" onClick={() => openAdd()} className={navyBtnCls}>
-            + Add Account
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          {!formMode && !showImportExport && (
+            <button
+              type="button"
+              onClick={() => setShowImportExport(true)}
+              className="font-body text-sm text-status-blue hover:underline"
+            >
+              Import / Export
+            </button>
+          )}
+          {canEdit && !formMode && (
+            <button type="button" onClick={() => openAdd()} className={navyBtnCls}>
+              + Add Account
+            </button>
+          )}
+        </div>
       </div>
+
+      {showImportExport && (
+        <div className="mb-6">
+          <ImportExportPanel
+            accounts={accounts}
+            onClose={() => setShowImportExport(false)}
+            onImported={loadAccounts}
+          />
+        </div>
+      )}
 
       {formMode && (
         <div className="mb-6">

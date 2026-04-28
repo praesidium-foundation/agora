@@ -1,0 +1,126 @@
+Account List,,,
+Libertas Academy,,,
+,,,
+Account #,Full name,Type,Detail type
+4000,Educational Program Revenue,Income,Service/Fee Income
+4100,Educational Program Revenue:Revenue – Tuition,Income,Service/Fee Income
+4190,Educational Program Revenue:Revenue – Tuition:Tuition Discounts,Income,Service/Fee Income
+4191,Educational Program Revenue:Revenue – Tuition:Tuition Discounts:Scholarship Discounts,Income,Service/Fee Income
+4192,Educational Program Revenue:Revenue – Tuition:Tuition Discounts:Teacher Discount,Income,Service/Fee Income
+4193,Educational Program Revenue:Revenue – Tuition:Tuition Discounts:Family Discount,Income,Service/Fee Income
+4194,Educational Program Revenue:Revenue – Tuition:Tuition Discounts:Board Discount,Income,Service/Fee Income
+4195,Educational Program Revenue:Revenue – Tuition:Tuition Discounts:Financial Aid,Income,Service/Fee Income
+4300,Educational Program Revenue:Fees,Income,Service/Fee Income
+4305,Educational Program Revenue:Fees:Curriculum/Book Fees,Income,Service/Fee Income
+4310,Educational Program Revenue:Fees:Enrollment Fees,Income,Service/Fee Income
+4315,Educational Program Revenue:Fees:Late Fees,Income,Service/Fee Income
+4320,Educational Program Revenue:Fees:Before/After School Care Fees,Income,Service/Fee Income
+4325,Educational Program Revenue:Fees:Homework Club,Income,Service/Fee Income
+4330,Educational Program Revenue:Fees:Field Trip Fees,Income,Service/Fee Income
+4335,Educational Program Revenue:Fees:Cap/Gown Fees,Income,Service/Fee Income
+4340,Educational Program Revenue:Fees:Ski/Alternate Day Fees,Income,Service/Fee Income
+4345,Educational Program Revenue:Fees:Hot Lunch Fees,Income,Service/Fee Income
+4350,Educational Program Revenue:Fees:Volunteer Buyout,Income,Service/Fee Income
+4435,Educational Program Revenue:Fees:Student Activities Fees,Income,Service/Fee Income
+4700,Educational Program Revenue:Financial Aid Expense,Income,Other Primary Income
+4710,Educational Program Revenue:Financial Aid Expense:Primary,Income,Other Primary Income
+4720,Educational Program Revenue:Financial Aid Expense:Secondary,Income,Other Primary Income
+5100,Student Activity Income,Income,Other Primary Income
+5120,Student Activity Income:Garden Project,Income,Other Primary Income
+5180,Student Activity Income:Student Activity - Spring Gala,Income,Other Primary Income
+5190,Student Activity Income:Student Activity - Athletics,Income,Other Primary Income
+5300,Contributions,Income,Other Primary Income
+5310,Contributions:Sponsors' Contributions,Income,Other Primary Income
+5315,Contributions:Donation - Raise Craze Fund,Income,Other Primary Income
+5320,Contributions:The Benevolence Fund,Income,Other Primary Income
+5325,Contributions:Donation - Eagle Fund,Income,Other Primary Income
+5330,Contributions:Donation - Financial Aid Fund,Income,Other Primary Income
+5340,Contributions:Donation - General,Income,Other Primary Income
+5345,Contributions:Donation - Athletics Fund,Income,Other Primary Income
+5350,Contributions:Donation - Vision Dinner,Income,Other Primary Income
+5360,Contributions:Donation – Year-end Giving,Income,Other Primary Income
+5361,Contributions:Donation - Olympics,Income,Other Primary Income
+5365,Contributions:Donation - Library Fund,Income,Other Primary Income
+5370,Contributions:Donation - Maintenance Fund,Income,Other Primary Income
+5390,Contributions:Other Donations,Income,Other Primary Income
+5500,Fundraising,Income,Other Primary Income
+5535,Fundraising:Pizza/DC Trip Fund,Income,Other Primary Income
+5700,Sales Revenue,Income,Sales of Product Income
+5710,Sales Revenue:Merchandise,Income,Sales of Product Income
+5720,Sales Revenue:Yearbook Fee,Income,Sales of Product Income
+5790,Sales Revenue:Sales Revenue - Other,Income,Sales of Product Income
+5900,Other Revenue,Income,Other Primary Income
+5910,Other Revenue:Convenience Fee,Income,Other Primary Income
+5920,Other Revenue:Bank Interest,Income,Other Primary Income
+6000,Personnel,Expenses,Payroll Wage Expenses
+6100,Personnel:Payroll,Expenses,Payroll Wage Expenses
+6110,Personnel:Payroll:Wages,Expenses,Payroll Expenses
+6115,Personnel:Payroll:Substitute Teachers,Expenses,Other Business Expenses
+6120,Personnel:Payroll:Taxes,Expenses,Payroll Expenses
+6140,Personnel:Payroll:Bonuses,Expenses,Payroll Wage Expenses
+6150,Personnel:Payroll:Reimbursements,Expenses,Payroll Expenses
+6500,Personnel:Independent Contractors,Expenses,Payroll Expenses
+7000,Educational Program Expenses,Expenses,Other Business Expenses
+7100,Educational Program Expenses:Supplies,Expenses,Other Business Expenses
+7110,Educational Program Expenses:Supplies:School/Teacher Supplies,Expenses,Other Miscellaneous Service Cost
+7120,Educational Program Expenses:Supplies:Library Books/Materials,Expenses,Supplies & Materials
+7130,Educational Program Expenses:Supplies:PE Expenses,Expenses,Other Business Expenses
+7140,Educational Program Expenses:Supplies:CLT Testing,Expenses,Other Business Expenses
+7200,Educational Program Expenses:Teacher Support/Tutors,Expenses,Other Business Expenses
+7300,Educational Program Expenses:Events/Activities,Expenses,Other Business Expenses
+7310,Educational Program Expenses:Events/Activities:Field Trip,Expenses,Other Business Expenses
+7320,Educational Program Expenses:Events/Activities:Ski/Alternate Day,Expenses,Other Business Expenses
+7400,Educational Program Expenses:Other Costs,Expenses,Other Business Expenses
+7410,Educational Program Expenses:Other Costs:Yearbook Costs,Expenses,Other Business Expenses
+7420,Educational Program Expenses:Other Costs:Merchandise Costs,Expenses,Other Business Expenses
+7500,Educational Program Expenses:Curriculum,Expenses,Other Business Expenses
+7800,Educational Program Expenses:Student Activity Expense,Expenses,Other Business Expenses
+7820,Educational Program Expenses:Student Activity Expense:Garden Project,Expenses,Other Business Expenses
+7825,Educational Program Expenses:Student Activity Expense:Winter Formal Expenses,Expenses,Other Business Expenses
+7830,Educational Program Expenses:Student Activity Expense:Athletic/Sports Expense,Expenses,Other Business Expenses
+7890,Educational Program Expenses:Student Activity Expense:Student Activity Expense - Other,Expenses,Other Business Expenses
+8000,Administrative Expenses,Expenses,Other Business Expenses
+8100,Administrative Expenses:Administrative,Expenses,Other Business Expenses
+8110,Administrative Expenses:Administrative:Gifts,Expenses,Other Business Expenses
+8115,"Administrative Expenses:Administrative:Accreditation, Misc",Expenses,Other Business Expenses
+8120,Administrative Expenses:Administrative:Office Supplies,Expenses,Other Business Expenses
+8121,Administrative Expenses:Administrative:Office Supplies:Postage/Shipping,Expenses,Other Business Expenses
+8122,Administrative Expenses:Administrative:Office Supplies:Printing/Copying,Expenses,Other Business Expenses
+8300,Administrative Expenses:Fundraising,Expenses,Other Business Expenses
+8310,Administrative Expenses:Fundraising:Vision Dinner Expenses,Expenses,Other Business Expenses
+8320,Administrative Expenses:Fundraising:Raffles,Expenses,Other Business Expenses
+8340,Administrative Expenses:Fundraising:Christmas Play Expense,Expenses,Other Business Expenses
+8341,Administrative Expenses:Fundraising:Olympics Expenses,Expenses,Other Business Expenses
+8360,Administrative Expenses:Fundraising:Fundraising Events – Others,Expenses,Other Business Expenses
+8400,Administrative Expenses:Information Technology,Expenses,Other Miscellaneous Service Cost
+8410,Administrative Expenses:Information Technology:IT Purchases,Expenses,Other Miscellaneous Service Cost
+8420,Administrative Expenses:Information Technology:Software/Subscriptions,Expenses,Other Miscellaneous Service Cost
+8430,Administrative Expenses:Information Technology:Phone System,Expenses,Other Business Expenses
+8500,Administrative Expenses:Training and Development,Expenses,Other Business Expenses
+8510,Administrative Expenses:Training and Development:Travel,Expenses,Other Business Expenses
+8530,Administrative Expenses:Training and Development:Food/Coffee/Snacks,Expenses,Other Business Expenses
+8540,Administrative Expenses:Training and Development:Conferences/Events,Expenses,Other Business Expenses
+8560,Administrative Expenses:Training and Development:Staff Development,Expenses,Other Business Expenses
+8570,Administrative Expenses:Training and Development:Board Development,Expenses,Other Miscellaneous Service Cost
+8580,Administrative Expenses:Training and Development:Teacher Training,Expenses,Other Business Expenses
+8600,Administrative Expenses:Human Resources,Expenses,Other Business Expenses
+8610,Administrative Expenses:Human Resources:Employee Hiring,Expenses,Other Business Expenses
+8800,Administrative Expenses:Business Expenses,Expenses,Other Business Expenses
+8810,Administrative Expenses:Business Expenses:Bank Fees,Expenses,Other Business Expenses
+8820,Administrative Expenses:Business Expenses:Credit Card Processing Fees,Expenses,Other Miscellaneous Service Cost
+8830,Administrative Expenses:Business Expenses:Insurance,Expenses,Other Miscellaneous Service Cost
+8840,Administrative Expenses:Business Expenses:Professional Services,Expenses,Cost of Labor
+8850,Administrative Expenses:Business Expenses:Advertising and Marketing,Expenses,Other Business Expenses
+8860,Administrative Expenses:Business Expenses:Dues and Subscriptions,Expenses,Other Business Expenses
+8890,Administrative Expenses:Business Expenses:Bad Debt,Expenses,Other Miscellaneous Service Cost
+8895,Administrative Expenses:Business Expenses:Other Business Expense,Expenses,Other Business Expenses
+9000,Facilities,Expenses,Other Business Expenses
+9110,Facilities:Rent,Expenses,Other Miscellaneous Service Cost
+9120,Facilities:Repair/Maintenance,Expenses,Other Miscellaneous Service Cost
+9130,Facilities:Furniture and Fixtures,Expenses,Other Business Expenses
+9140,Facilities:Property Taxes,Expenses,Other Miscellaneous Service Cost
+9210,Facilities:Utilities,Expenses,Other Miscellaneous Service Cost
+9310,Facilities:Cleaning & Paper Supplies,Expenses,Other Business Expenses
+9410,Facilities:School Cleaning,Expenses,Other Business Expenses
+9990,Uncategorized Expense,Expenses,Other Miscellaneous Service Cost
+99992,Unapplied Cash Bill Payment Expense,Expenses,Unapplied Cash Bill Payment Expense

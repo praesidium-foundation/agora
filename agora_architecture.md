@@ -194,6 +194,8 @@ ADMIN
     └─ Module Configuration
 ```
 
+**Top-level category collapse**: GOVERNANCE / OPERATIONS / BUDGET / ACTUALS / ADMIN are each collapsible. The chevron and label both toggle the section. Default on first visit: all expanded. Collapse state persists across sessions in `localStorage` under the key `agora.sidebar.collapsedSections` (an array of section ids). When the current route lives in a collapsed section, that section auto-expands so the user can see their location in the sidebar — applied on every route change so deep-links and back-navigation both work. Dashboard sits at the top, not under any category, and is not collapsible. School Settings inside ADMIN has its own sub-item expand/collapse (independent of the top-level ADMIN toggle) using the same chevron pattern.
+
 ### 3.3 Time-scoping across modules
 
 | Module | Time scope | Lifecycle |
@@ -327,24 +329,61 @@ EDUCATION PROGRAMS                               $84,400
 
 Categories are visible with rollup totals. Click to expand/collapse. Entry happens at posting-account level (any account where `posts_directly = true`, leaf or parent). Rollups computed at render time.
 
-### 4.6 QuickBooks CSV import
+### 4.6 CSV import / export
 
-QuickBooks's standard "Account List" export uses colon-delimited parent paths (e.g., `"Educational Program Revenue:Revenue – Tuition:"`). The importer:
+The COA management UI supports CSV import and export from the Financial settings page. Import handles two source formats; export emits the generic format so round-tripping works.
 
-1. Parses CSV
-2. Walks parent paths to find or create ancestor accounts
-3. Sets parent_id, code, name, account_type, is_active from row
-4. Leaves governance flags blank (default false)
-5. Surfaces imported chart for guided flag application
+**Source formats (auto-detected on upload)**:
 
-After import, a guided "review and flag" step walks the user through:
-- Which accounts are summary (rollup only) vs posting. QB's CSV doesn't distinguish — every account starts as posting (the migration default). The user marks summaries explicitly during review (e.g., "Educational Program Revenue" as summary, "Revenue – Tuition" beneath it as posting).
-- Which income accounts are pass-thrus
-- Which income accounts count as Ed Program Dollars
-- Which income accounts are contributions
-- Which expense accounts are pass-thrus
+1. **Generic Agora format** — same shape as the export. Columns: `code, subaccount_of, name, account_type, posts_directly, is_pass_thru, is_ed_program_dollars, is_contribution, sort_order, is_active, notes`. The `subaccount_of` column uses colon-delimited path of ancestor account names (matches QB convention).
+2. **QuickBooks Online (QBO) Account List CSV** — native QBO export format. Real exports include 2–3 metadata rows before the actual header (e.g., `Account List` / company name / blank); the parser scans the first 20 rows and discards anything above the recognized header. The header itself uses these exact column names: **`Account #`** (maps to `code`), **`Full name`** (colon-delimited subaccount path; maps to `subaccount_of` + `name`), **`Type`** (maps to `account_type`), **`Detail type`** (ignored — informational only). The `Type` column uses **`Income`** and **`Expenses`** (note: plural for expense). Governance flags aren't present in QBO exports — every imported account defaults to `posts_directly = true` and all flags `false`; the user sets these during the post-import guided review.
 
-For Libertas: ~70 accounts, ~15-20 minutes once.
+QBO rows of types other than Income / Expenses (`Bank`, `Accounts Receivable`, `Accounts Payable`, `Equity`, `Credit Card`, `Other Asset`, `Other Liability`, etc.) are **rejected with a budgeting-only message** and surfaced in the validation step. The user chooses to skip these rows and continue, or cancel and filter the CSV first. They are not silently dropped.
+
+**Canonical test artifact**: `test/fixtures/Libertas_Academy_Account_List.csv` is preserved in the repo for regression testing of the QBO format path. It exercises: 3 metadata rows before header, plural `Expenses` type, embedded comma in a quoted account name, 4-level nesting depth.
+
+**Brand-neutral framing in user copy**: Although the parser today specifically handles QuickBooks Online's Account List export format, user-facing copy throughout Agora uses software-neutral language ("your accounting software", "your books", "standard account list format"). The format-detected confirmation banner does name the format ("QuickBooks Account List format detected") because that's a factual identification of what was detected, not promotional copy. Future support for other accounting software (Xero, Sage, Aplos, etc.) will extend the parser without requiring copy changes. See Section 10.8 for the language standard.
+
+**Parser responsibilities**: the import path runs through these stages —
+1. Parse CSV (handles BOM, quoted fields with commas, embedded newlines).
+2. Dynamic header detection: scan up to 20 rows for either `subaccount_of` (generic) or `Full name` + `Type` (QBO). Discard everything above the recognized header.
+3. Format-specific normalization into a uniform internal row shape carrying `_lineNo` for accurate validation error messages.
+4. Validation: missing names, invalid types, duplicate paths, duplicate codes, path resolution, type consistency, cycle detection.
+5. Conflict mode + import.
+
+**Five-stage import flow**:
+
+1. **Upload** — file picker (.csv only). Parsing is client-side; nothing writes to the database until confirmation.
+2. **Parse + format detection** — banner shows "Detected: …" so the user can confirm. Parse failures show clear error and let user retry.
+3. **Validation + preview** — every row validated before showing the preview tree:
+   - Required fields present
+   - `account_type` is `income` or `expense`
+   - Subaccount paths resolve to other rows in the same file (no orphans)
+   - No cycles in subaccount paths
+   - No duplicate codes
+   - Type consistency (subaccount type matches every ancestor's type)
+   - If errors: show error list with row numbers, user fixes file and retries (no proceed)
+   - If clean: render preview tree with subaccount nesting, posting/summary indicator, and any flags from the file
+4. **Conflict mode** — only shown if COA is non-empty:
+   - **Append** (default): inserts new accounts; rejects entire import if any code or full-path conflicts with existing
+   - **Replace**: requires explicit "I understand" checkbox; auto-downloads current COA as backup CSV before deletion; then deletes all existing accounts and inserts the imported set
+5. **Import + guided flag review** — writes to database. For QBO-format imports (where flags are absent), the importer **automatically routes** to a bulk flag-review grid of all imported accounts with Kind dropdown (Posting / Summary) and three flag checkboxes per row, so the user can configure 70+ accounts efficiently in one screen. This is mandatory next-step work for QBO imports — the user does not see the populated tree until they Save All or Skip from the grid. For generic-format imports where flags came from the CSV, the grid is offered as an optional review on the success page.
+
+**Bulk flag review grid behavior**:
+- **Tree-order display**: rows are sorted in depth-first traversal order; the Name column is indented (16px per level) so the hierarchy is visible at a glance.
+- **Smart defaults**: accounts with no subaccounts default to Posting; accounts with subaccounts default to Summary. User overrides per row (since posting parents like a "Revenue – Tuition" line that posts gross do exist and need flagging).
+- **Flag interaction rules**:
+  - All three flag checkboxes are disabled when Kind is Summary (DB trigger would reject otherwise).
+  - Ed Program $ and Contribution are disabled when Type ≠ Income.
+  - **Pass-Thru and (Ed Program $ / Contribution) are mutually exclusive** — checking any one disables the other(s); switching auto-clears the conflicting flag.
+- **Save All** commits all changes (one UPDATE per row that actually changed) and closes the panel, returning to the financial settings page with the populated, flagged tree.
+- **Skip for now** leaves accounts as-imported (Posting=true, all flags=false) and closes the panel. User can edit individually via the tree later.
+
+**Transactional behavior**: each insert is its own Supabase request (no client-side transactions). A best-effort rollback on mid-flight failure deletes already-inserted rows by id. For Replace mode specifically, if the wipe succeeds but inserts fail, the COA is left empty; the auto-downloaded backup CSV from step 4 is the recovery path.
+
+**Permissions**: import requires `admin` permission on `chart_of_accounts` (potentially destructive). Export requires `view` (read-only). UI gates accordingly.
+
+**For Libertas**: ~70 accounts, one QB Account List CSV, ~15–20 minutes including the flag review.
 
 ### 4.7 Versioning (Option 2: account state at lock time)
 
@@ -401,6 +440,10 @@ Two delete paths exist on `chart_of_accounts`:
 The function returns both a boolean and a human-readable `blocking_reason` string. The UI surfaces the reason via a small `(i)` hint icon next to Deactivate when the user has admin permission but the account isn't safe to hard-delete. The Delete button itself is hidden in that state — the (i) tooltip is the affordance for "why no Delete?"
 
 The change_log trigger from Migration 004 fires on DELETE, so hard-deletes are audit-logged automatically with the full row state captured in `old_value`.
+
+### 4.13 User-facing vocabulary
+
+Account hierarchy is referred to as **"subaccounts"** and **"subaccount of"** in all user-facing copy, matching QuickBooks conventions and accountant vocabulary. The database column `parent_id` is internal-only — it never appears in UI, error messages, or tooltips. The mapping is one-to-one (`parent_id` → "subaccount of"; an account whose `parent_id` references X is "a subaccount of X"). Trigger error messages still use older `parent / child / cycle` wording from Migration 004; these are translated at the UI surface (see `translateError` in `CoaManagement.jsx`) so the user-facing experience is consistent. A future migration could rephrase the trigger messages directly; not yet scheduled.
 
 ---
 
@@ -1292,6 +1335,16 @@ These standards live in `CLAUDE.md` (for Claude Code enforcement) and in this do
 
 Each school configures its own brand specifics in **Settings → Brand** during onboarding.
 
+### 10.8 Software-neutral language
+
+User-facing copy in Agora does not name third-party products by brand. Concepts that originated with specific software (e.g., "subaccount of" from QuickBooks vocabulary) are adopted as accounting-domain vocabulary, not promoted as product references. The principle is product neutrality: Agora is sold to schools using various accounting software (QuickBooks Online, Xero, Sage, Wave, Aplos, etc.), and naming any one in narrative copy implicitly endorses it and alienates the others.
+
+**The line**:
+- ✅ **Allowed** — Format detection results that name a format by its source as a factual identification (e.g., "QuickBooks Account List format detected"). The user has uploaded a specific file format and Agora is reporting what it found.
+- ❌ **Not allowed** — Narrative copy that uses one product as the reference point for a concept (e.g., "money posts here in QuickBooks", "Upload a QuickBooks Account List export…"). Use brand-neutral phrasing: "transactions post directly to this account", "your accounting software", "your books".
+
+Internal code (variable names like `parseQuickbooks`, comments, JSDoc) may freely reference QuickBooks because that's technical accuracy, not user-facing marketing. The boundary is the rendered string.
+
 ---
 
 ## 11. Future Modules (Acknowledged but Not Yet Designed)
@@ -1535,6 +1588,10 @@ Version history:
 - **v1.2** — April 27, 2026 — Posting vs summary account model. Section 4 rewritten: leaf-only governance flag rule replaced with posting-only rule (`posts_directly = true`). The leaf-only rule made it impossible to flag parent accounts that post directly in QuickBooks (e.g., "Revenue – Tuition" containing a "Tuition Discounts" subtree), producing incorrect Ed Program Dollars math. See Migration 005 and Section 4.11 (Deprecated rules). Budget refactor pushed to Migration 006; subsequent migrations renumbered. Appendix D added for known tactical gaps.
 - **v1.3** — April 27, 2026 — Migration 006: default privileges set on public schema. GRANT discipline resolved systemically. Appendix D entry updated from open issue to resolved. Budget refactor renumbered to Migration 007; subsequent migrations renumbered accordingly.
 - **v1.4** — April 27, 2026 — UI corrections sweep: contrast tokens rationalized (`muted` redefined from warm gray `#6B6760` to navy-tinted `#475472` = navy at 80% opacity equivalent; `status-amber` darkened from `#BA7517` to `#8C5410` to pass WCAG AA on cream); back navigation `Breadcrumb` component added and wired into every content page; COA tree posting/summary visual distinction (italic "summary" tag with middot separator); Account Kind helper text tightened. No schema changes.
+- **v1.5** — April 27, 2026 — CSV import/export implemented for Chart of Accounts. Two source formats supported on import: generic Agora format (round-trips with export) and QuickBooks Account List CSV (auto-detected via `Account` + `Type` headers). Five-stage import flow with preview tree, validation (path resolution, type consistency, cycle detection, duplicate codes), Append vs Replace conflict modes, auto-backup before Replace, and a bulk flag-review grid for QB imports where governance flags aren't in the CSV. Vocabulary refined to QuickBooks-aligned terminology in user-facing copy: "subaccount of" replaces "Parent" in form labels and table headers; "+ Subaccount" replaces "+ Child" buttons; helper text updated throughout. Database column `parent_id` unchanged — see Section 4.13. Trigger error messages translated client-side at UI surface (`translateError` in `CoaManagement.jsx`).
+- **v1.6** — April 27, 2026 — CSV importer hardened against real QBO export format. Parser bugs fixed: (1) dynamic header detection — scan first 20 rows, discard metadata rows above the recognized header; (2) real QBO column names — `Account #`, `Full name`, `Type`, `Detail type` (vs the previously assumed `Account` and `Type`); (3) plural `Expenses` value normalized to `expense`. Non-Income/Expense rows (Bank, A/R, Equity, etc.) are now explicitly rejected with a budgeting-only message rather than silently skipped — user chooses skip-and-continue or cancel. **Guided flag review routing fixed**: QBO-format imports now auto-route to the bulk flag-review grid (mandatory next step), instead of dumping users on a success page where the grid was buried behind an extra click. Grid additionally upgraded with tree-order display, depth-based name indentation, and symmetric Pass-Thru ↔ Ed Program $ / Contribution mutual exclusivity. Save All now closes the panel directly on success (returns to the financial settings tree); Skip for now likewise. Added downloadable CSV template (`agora_coa_template.csv`) with example rows in the generic format. Improved unrecognized-format error: lists the columns found in the uploaded file and the columns expected for each supported format, with a link to download the template. Test fixture `test/fixtures/Libertas_Academy_Account_List.csv` preserved for regression testing.
+- **v1.7** — April 27, 2026 — User-facing copy neutralized: QuickBooks references removed from product narrative (import panel description, helper text on the Account Kind radio, guided-review grid helper text, format-not-recognized error). Technical references in parser implementation and code comments preserved. Format-detected confirmation banner still factually names "QuickBooks Account List format" because it's identification of what was uploaded, not promotional copy. New Section 10.8 codifies the language standard. Sticky column headers added to the guided flag review grid (inner-scroll container with max-height) and the COA Flat view (page-level sticky on `<th>` cells), so the column legend stays visible while scrolling 70+ row charts of accounts.
+- **v1.8** — April 27, 2026 — Sidebar: ACTUALS section added between BUDGET and ADMIN per Section 3.2 with two future-disabled sub-items (Advancement, Cash Flow). All five top-level categories (GOVERNANCE / OPERATIONS / BUDGET / ACTUALS / ADMIN) made collapsible — chevron + label both toggle, smooth `grid-template-rows` transition (200ms), state persisted in `localStorage` (`agora.sidebar.collapsedSections`). Auto-expand on route change so the section containing the active page is always visible in the sidebar. Dashboard remains a top-level link without a parent category. School Settings sub-item expand/collapse pattern (preserved from earlier work) operates independently of the top-level ADMIN toggle.
 - **v2.0** — April 27, 2026 — Conditional hard delete on COA accounts implemented (Migration 007). New Section 4.12 documents the soft-delete (Deactivate) vs hard-delete distinction. The DB function `chart_of_accounts_can_hard_delete(account_id)` returns both a boolean and a human-readable blocking reason; the UI hides the Delete button when the account isn't safe and surfaces the reason via a hover (i) icon next to Deactivate. RLS policy split: `coa_insert` and `coa_update` keep the edit-permission gate (so soft-delete still works at edit level), `coa_delete` requires `admin`. Hard-delete audit logging is automatic via the existing change_log trigger. Function body is structured to extend as Phase 2+ modules add FK references to `chart_of_accounts`.
 
 ---

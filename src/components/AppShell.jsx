@@ -9,13 +9,18 @@ import AYEBadge from './AYEBadge'
 // lock indicator can light up when that module's instance is locked
 // for the current AYE. `subItems` makes an item expandable with nested
 // sub-routes; the parent itself is also navigable to its `to` path.
-// The first section has no label — Dashboard sits at the top alone.
+//
+// Each labeled section has an explicit `id` used as the localStorage
+// key for collapsed-state persistence. Dashboard (label: null) has no
+// id because it isn't collapsible.
 const NAV_SECTIONS = [
   {
+    id: null,
     label: null,
     items: [{ label: 'Dashboard', to: '/dashboard', enabled: true }],
   },
   {
+    id: 'governance',
     label: 'Governance',
     items: [
       { label: 'Board Calendar', to: '#', enabled: false },
@@ -26,6 +31,7 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    id: 'operations',
     label: 'Operations',
     items: [
       { label: 'Head of School Report', to: '#', enabled: false },
@@ -35,6 +41,7 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    id: 'budget',
     label: 'Budget',
     items: [
       { step: 1, label: 'Enrollment',       to: '/modules/enrollment',          enabled: false, lockKey: 'enrollment_estimator' },
@@ -46,6 +53,19 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    id: 'actuals',
+    label: 'Actuals',
+    items: [
+      // Both items are placeholder/future. Advancement is Phase 5; Cash Flow is
+      // Phase 9+. Per the user's design call, both render in the disabled state
+      // until the actual modules ship — no point being clickable when there's
+      // nothing useful behind the click.
+      { label: 'Advancement', to: '/modules/advancement', enabled: false },
+      { label: 'Cash Flow',   to: '/modules/cash-flow',   enabled: false },
+    ],
+  },
+  {
+    id: 'admin',
     label: 'Admin',
     adminOnly: true,
     items: [
@@ -65,6 +85,43 @@ const NAV_SECTIONS = [
     ],
   },
 ]
+
+const COLLAPSED_STORAGE_KEY = 'agora.sidebar.collapsedSections'
+
+// Read the persisted collapsed-section IDs from localStorage. Returns a Set
+// of section IDs that should render collapsed on first paint.
+function loadCollapsedFromStorage() {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_STORAGE_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed)
+  } catch {
+    return new Set()
+  }
+}
+
+// Find the section ID whose items contain the given pathname. Returns null
+// if no section matches (e.g., on /dashboard which has no labeled section).
+function findSectionForPath(pathname) {
+  for (const section of NAV_SECTIONS) {
+    if (!section.id) continue
+    for (const item of section.items) {
+      if (item.to && item.to !== '#' && (pathname === item.to || pathname.startsWith(item.to + '/'))) {
+        return section.id
+      }
+      if (item.subItems) {
+        for (const sub of item.subItems) {
+          if (sub.to && sub.to !== '#' && (pathname === sub.to || pathname.startsWith(sub.to + '/'))) {
+            return section.id
+          }
+        }
+      }
+    }
+  }
+  return null
+}
 
 const baseClasses =
   'flex items-center gap-2.5 px-4 py-[7px] text-[13px] border-l-2 font-body'
@@ -184,18 +241,77 @@ function NavItem({ item, lockedCodes }) {
   )
 }
 
-function SectionHeader({ children }) {
+// Top-level category header. Acts as a button that toggles the section's
+// collapsed state. Both the chevron and the label are click targets.
+function SectionHeader({ id, label, expanded, onToggle }) {
   return (
-    <div className="font-display text-[14px] tracking-[0.14em] text-gold/75 uppercase px-4 mt-[18px] mb-2">
-      {children}
-    </div>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      aria-controls={`section-body-${id}`}
+      className="w-full flex items-center gap-2 font-display text-[14px] tracking-[0.14em] text-gold/75 uppercase px-4 mt-[18px] mb-2 hover:text-gold transition-colors text-left"
+    >
+      {/* Chevron rotates 0deg expanded, -90deg collapsed. Single character
+          + transform avoids layout shifts that two glyphs would cause. */}
+      <span
+        className="inline-block text-[10px] text-gold/70 leading-none transition-transform duration-200"
+        style={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+        aria-hidden="true"
+      >
+        ▼
+      </span>
+      <span className="flex-1">{label}</span>
+    </button>
   )
 }
 
 function AppShell({ children }) {
   const { user, profile } = useAuth()
+  const { pathname } = useLocation()
   const [aye, setAye] = useState(null)
   const [lockedCodes, setLockedCodes] = useState(new Set())
+
+  // Top-level section collapse state. Default: all expanded (empty Set).
+  // Hydrated from localStorage on first render.
+  const [collapsedSections, setCollapsedSections] = useState(() =>
+    loadCollapsedFromStorage()
+  )
+
+  // Persist collapse state on every change.
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        COLLAPSED_STORAGE_KEY,
+        JSON.stringify([...collapsedSections])
+      )
+    } catch {
+      // localStorage unavailable (private browsing, etc.) — silently ignore.
+    }
+  }, [collapsedSections])
+
+  // Auto-expand the section containing the current route. Runs on every
+  // pathname change, so deep-links and back-navigation both surface the
+  // user's location.
+  useEffect(() => {
+    const sectionId = findSectionForPath(pathname)
+    if (!sectionId) return
+    setCollapsedSections((prev) => {
+      if (!prev.has(sectionId)) return prev
+      const next = new Set(prev)
+      next.delete(sectionId)
+      return next
+    })
+  }, [pathname])
+
+  function toggleSection(id) {
+    setCollapsedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // Load current AYE + which of its module instances are locked.
   useEffect(() => {
@@ -272,20 +388,50 @@ function AppShell({ children }) {
           <nav className="flex-1 overflow-y-auto py-4">
             {NAV_SECTIONS.map((section, sIdx) => {
               if (section.adminOnly && !profile?.is_system_admin) return null
+              const isCollapsible = !!section.id
+              const expanded =
+                isCollapsible ? !collapsedSections.has(section.id) : true
+
               return (
-                <div key={section.label ?? `top-${sIdx}`}>
+                <div key={section.id ?? `top-${sIdx}`}>
                   {section.label ? (
-                    <SectionHeader>{section.label}</SectionHeader>
+                    <SectionHeader
+                      id={section.id}
+                      label={section.label}
+                      expanded={expanded}
+                      onToggle={() => toggleSection(section.id)}
+                    />
                   ) : (
                     <div className="mt-1" />
                   )}
-                  {section.items.map((item) => (
-                    <NavItem
-                      key={`${section.label ?? 'top'}-${item.label}`}
-                      item={item}
-                      lockedCodes={lockedCodes}
-                    />
-                  ))}
+                  {/* Collapsible body. grid-template-rows transitions from 0fr
+                      → 1fr animate height changes without measuring content.
+                      Inner overflow-hidden clips children mid-transition. */}
+                  {isCollapsible ? (
+                    <div
+                      id={`section-body-${section.id}`}
+                      className="grid transition-all duration-200 ease-out"
+                      style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
+                    >
+                      <div className="overflow-hidden">
+                        {section.items.map((item) => (
+                          <NavItem
+                            key={`${section.id}-${item.label}`}
+                            item={item}
+                            lockedCodes={lockedCodes}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    section.items.map((item) => (
+                      <NavItem
+                        key={`top-${item.label}`}
+                        item={item}
+                        lockedCodes={lockedCodes}
+                      />
+                    ))
+                  )}
                 </div>
               )
             })}
