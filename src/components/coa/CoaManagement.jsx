@@ -103,9 +103,16 @@ function SummaryIndicator() {
 
 // ---- Tree view -----------------------------------------------------------
 
-function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate, onReactivate, canEdit, canApprove }) {
+function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate, onReactivate, onDelete, canEdit, canApprove, canAdmin }) {
   const hasChildren = node.children.length > 0
   const isOpen = expanded.has(node.id)
+  // Hard-delete is offered when the user has admin perm AND nothing else
+  // references this account. Today the only check is "no subaccounts" —
+  // the DB function `chart_of_accounts_can_hard_delete` is the source of
+  // truth and gets called server-side at click time as a safety net for
+  // future FK references.
+  const showDelete = canAdmin && !hasChildren
+  const showCannotDeleteHint = canAdmin && hasChildren
 
   return (
     <>
@@ -159,6 +166,23 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
               <button onClick={() => onReactivate(node)} className="text-status-blue hover:underline">Reactivate</button>
             )
           )}
+          {showCannotDeleteHint && (
+            <span
+              title={`Cannot delete: Account has ${node.children.length} subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
+              aria-label="Why can't I delete this?"
+              className="text-muted/70 text-[12px] cursor-help select-none"
+            >
+              (i)
+            </span>
+          )}
+          {showDelete && (
+            <button
+              onClick={() => onDelete(node)}
+              className="text-status-red hover:underline"
+            >
+              Delete…
+            </button>
+          )}
         </div>
       </div>
 
@@ -173,8 +197,10 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
           onEdit={onEdit}
           onDeactivate={onDeactivate}
           onReactivate={onReactivate}
+          onDelete={onDelete}
           canEdit={canEdit}
           canApprove={canApprove}
+          canAdmin={canAdmin}
         />
       ))}
     </>
@@ -270,7 +296,7 @@ function TreeView({ tree, ...handlers }) {
 
 // ---- Flat view -----------------------------------------------------------
 
-function FlatTable({ accounts, parentNameById, onAdd, onEdit, onDeactivate, onReactivate, canEdit, canApprove }) {
+function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdit, onDeactivate, onReactivate, onDelete, canEdit, canApprove, canAdmin }) {
   const [sortBy, setSortBy] = useState('name')
   const [sortDir, setSortDir] = useState('asc')
 
@@ -373,6 +399,20 @@ function FlatTable({ accounts, parentNameById, onAdd, onEdit, onDeactivate, onRe
                   ) : (
                     <button onClick={() => onReactivate(a)} className="text-status-blue hover:underline">Reactivate</button>
                   )
+                )}
+                {canAdmin && parentsWithChildren.has(a.id) && (
+                  <span
+                    title={`Cannot delete: Account has subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
+                    aria-label="Why can't I delete this?"
+                    className="text-muted/70 text-[12px] cursor-help select-none"
+                  >
+                    (i)
+                  </span>
+                )}
+                {canAdmin && !parentsWithChildren.has(a.id) && (
+                  <button onClick={() => onDelete(a)} className="text-status-red hover:underline">
+                    Delete…
+                  </button>
                 )}
               </td>
             </tr>
@@ -670,6 +710,7 @@ function CoaManagement() {
   const { allowed, loading: permLoading } = useModulePermission('chart_of_accounts', 'view')
   const { allowed: canEdit } = useModulePermission('chart_of_accounts', 'edit')
   const { allowed: canApprove } = useModulePermission('chart_of_accounts', 'approve_lock')
+  const { allowed: canAdmin } = useModulePermission('chart_of_accounts', 'admin')
 
   const [accounts, setAccounts] = useState([])
   const [dataLoading, setDataLoading] = useState(true)
@@ -684,6 +725,14 @@ function CoaManagement() {
   const [formSubmitting, setFormSubmitting] = useState(false)
 
   const [success, setSuccess] = useState(null)
+
+  // Hard-delete confirmation state. deleteTarget is the account pending
+  // confirmation; deleteVerifying covers the RPC safety check before the
+  // dialog opens; deleting covers the actual DELETE call.
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteVerifying, setDeleteVerifying] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState(null)
 
   async function loadAccounts() {
     setDataLoading(true)
@@ -710,6 +759,17 @@ function CoaManagement() {
     const m = new Map()
     for (const a of accounts) m.set(a.id, a.name)
     return m
+  }, [accounts])
+
+  // Set of ids that have at least one subaccount. Used by the FlatTable to
+  // decide whether to show the Delete button or the cannot-delete (i) hint
+  // per row. TreeNode has the same info via node.children.length.
+  const parentsWithChildren = useMemo(() => {
+    const s = new Set()
+    for (const a of accounts) {
+      if (a.parent_id) s.add(a.parent_id)
+    }
+    return s
   }, [accounts])
 
   function openAdd(parentId = null) {
@@ -804,6 +864,68 @@ function CoaManagement() {
     }
   }
 
+  // Hard-delete: two-step. The button only renders when the client-side
+  // check (no subaccounts) passes, but on click we still hit the DB
+  // function as a safety net for future FK references that the client
+  // doesn't know about.
+  async function handleHardDeleteClick(account) {
+    setDeleteVerifying(true)
+    setDataError(null)
+    setDeleteError(null)
+
+    const { data, error } = await supabase.rpc(
+      'chart_of_accounts_can_hard_delete',
+      { p_account_id: account.id }
+    )
+
+    setDeleteVerifying(false)
+
+    if (error) {
+      setDataError(error.message)
+      return
+    }
+
+    // RPC returns a table — single row in this shape.
+    const result = Array.isArray(data) ? data[0] : data
+    if (!result?.can_delete) {
+      setDataError(
+        result?.blocking_reason ||
+          'This account cannot be hard-deleted. Try Deactivate instead.'
+      )
+      return
+    }
+
+    setDeleteTarget(account)
+  }
+
+  async function handleConfirmHardDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    setDeleteError(null)
+
+    const { error } = await supabase
+      .from('chart_of_accounts')
+      .delete()
+      .eq('id', deleteTarget.id)
+
+    setDeleting(false)
+
+    if (error) {
+      setDeleteError(error.message)
+      return
+    }
+
+    setSuccess(`Deleted ${deleteTarget.name}.`)
+    setDeleteTarget(null)
+    loadAccounts()
+  }
+
+  function handleCancelHardDelete() {
+    if (deleting) return
+    setDeleteTarget(null)
+    setDeleteError(null)
+  }
+
   if (permLoading) {
     return <p className="text-muted">Loading…</p>
   }
@@ -880,20 +1002,84 @@ function CoaManagement() {
           onEdit={openEdit}
           onDeactivate={handleDeactivate}
           onReactivate={handleReactivate}
+          onDelete={handleHardDeleteClick}
           canEdit={canEdit}
           canApprove={canApprove}
+          canAdmin={canAdmin}
         />
       ) : (
         <FlatTable
           accounts={accounts}
           parentNameById={parentNameById}
+          parentsWithChildren={parentsWithChildren}
           onAdd={openAdd}
           onEdit={openEdit}
           onDeactivate={handleDeactivate}
           onReactivate={handleReactivate}
+          onDelete={handleHardDeleteClick}
           canEdit={canEdit}
           canApprove={canApprove}
+          canAdmin={canAdmin}
         />
+      )}
+
+      {/* Hard-delete confirmation dialog. Modal-style overlay; close on
+          backdrop click except while a delete is in flight. */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/30"
+          onClick={handleCancelHardDelete}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white border-[0.5px] border-card-border rounded-[10px] max-w-md w-full p-6 shadow-lg"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="coa-delete-dialog-title"
+          >
+            <h3
+              id="coa-delete-dialog-title"
+              className="font-display text-navy text-[18px] mb-3 leading-tight"
+            >
+              Delete account "{deleteTarget.name}"?
+            </h3>
+            <p className="text-body text-sm mb-3 leading-relaxed">
+              This permanently removes the account from the Chart of Accounts.{' '}
+              <strong className="font-medium">
+                The action cannot be undone.
+              </strong>
+            </p>
+            <p className="text-muted text-sm italic mb-6 leading-relaxed">
+              Account references checked: this account has no subaccounts and is
+              not used by any other module.
+            </p>
+
+            {deleteError && (
+              <p className="text-status-red text-sm mb-4" role="alert">
+                {deleteError}
+              </p>
+            )}
+
+            <div className="flex items-center justify-end gap-4">
+              <button
+                type="button"
+                onClick={handleCancelHardDelete}
+                disabled={deleting}
+                className="font-body text-muted hover:text-navy text-sm disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmHardDelete}
+                disabled={deleting}
+                className="bg-status-red text-white border-[0.5px] border-status-red px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {deleting ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )

@@ -391,6 +391,17 @@ The key move: 4100 Revenue – Tuition is **flagged AND has children**. The leaf
 
 The `is_leaf_account()` helper from Migration 004 remains in the schema for any caller that wants strict leaf semantics, but is **deprecated for COA validation** — use `is_posting_account()` instead.
 
+### 4.12 Delete behavior
+
+Two delete paths exist on `chart_of_accounts`:
+
+- **Soft-delete (Deactivate)** — sets `is_active = false`. The row stays in the table; historical references (snapshots, change_log, future budget rows) remain valid. Available to users with `approve_lock` permission. The default and recommended action for almost all "remove from selection" cases.
+- **Hard-delete** — actual `DELETE FROM chart_of_accounts`. Removes the row entirely. Gated by **two conditions**: (1) user has `admin` permission on `chart_of_accounts` (RLS-enforced via the `coa_delete` policy added in Migration 007), and (2) the function `chart_of_accounts_can_hard_delete(account_id)` returns `can_delete = true`. The function checks for any other table that references this account; today the only check is the self-referential subaccount FK on `parent_id`. When Phase 2+ modules add FK references (budget line items, tuition references, etc.), the function body extends to check those tables. The signature stays stable; the body grows.
+
+The function returns both a boolean and a human-readable `blocking_reason` string. The UI surfaces the reason via a small `(i)` hint icon next to Deactivate when the user has admin permission but the account isn't safe to hard-delete. The Delete button itself is hidden in that state — the (i) tooltip is the affordance for "why no Delete?"
+
+The change_log trigger from Migration 004 fires on DELETE, so hard-deletes are audit-logged automatically with the full row state captured in `old_value`.
+
 ---
 
 ## 5. Snapshots, Redaction, and PDF Architecture
@@ -1458,15 +1469,16 @@ Each phase delivers usable value while building toward the full vision. Specific
 - **Migration 004**: Chart of Accounts schema (self-referential hierarchy, type-inheritance + leaf-only flag triggers [latter superseded by 005], semantic flag CHECK, cycle-prevention trigger, `is_leaf_account()` helper, RLS, `chart_of_accounts` module + admin permission seed, change_log read policy extended). Amended after initial run to include the `grant select, insert, update, delete on chart_of_accounts to authenticated` line missing from the first cut.
 - **Migration 005**: Chart of Accounts posting vs summary model — adds `posts_directly` column, drops the leaf-only flag trigger, replaces with posting-only flag trigger, adds `is_posting_account()` helper. Resolves the leaf-only flaw that prevented flagging parent accounts that post directly (e.g., "Revenue – Tuition" with a "Tuition Discounts" subtree).
 - **Migration 006**: Default privileges for `authenticated` role on `public` schema — `ALTER DEFAULT PRIVILEGES` for tables, sequences, and functions created by `postgres` and `supabase_admin`, plus a catch-up grant on existing objects. Resolves the GRANT discipline class of bug (Migration 004 hit this; 005 worked around it with a per-table grant). Future migrations no longer need explicit per-table grants.
+- **Migration 007**: Conditional hard delete on COA accounts — adds `chart_of_accounts_can_hard_delete(account_id)` function (returns `can_delete` + `blocking_reason`; today checks self-referential subaccount FK, body extends as Phase 2+ tables add FK references). Splits the COA write RLS policy from one `coa_write` (edit-gated) into three: `coa_insert` and `coa_update` (edit-gated; soft-delete still works at edit level), `coa_delete` (admin-gated). Hard-delete audit logging is automatic via the existing `coa_change_log` trigger.
 
 ### Migrations needed (per this architecture)
 
-- **Migration 007**: Refactor `preliminary_budget` and `final_budget` for chart-of-accounts FK (validated via `is_posting_account()`), scenario structure
-- **Migration 008**: Strategic Plan schemas (three instruments)
-- **Migration 009**: Snapshot tables for Budget, Tuition, Staffing, Enrollment
-- **Migration 010**: Board Composition + Committees
-- **Migration 011**: Org Acronyms registry, Custom KPI registry
-- **Migration 012**: Module-to-Account mappings
+- **Migration 008**: Refactor `preliminary_budget` and `final_budget` for chart-of-accounts FK (validated via `is_posting_account()`), scenario structure
+- **Migration 009**: Strategic Plan schemas (three instruments)
+- **Migration 010**: Snapshot tables for Budget, Tuition, Staffing, Enrollment
+- **Migration 011**: Board Composition + Committees
+- **Migration 012**: Org Acronyms registry, Custom KPI registry
+- **Migration 013**: Module-to-Account mappings
 - (Additional migrations as build phases progress)
 
 ---
@@ -1523,6 +1535,7 @@ Version history:
 - **v1.2** — April 27, 2026 — Posting vs summary account model. Section 4 rewritten: leaf-only governance flag rule replaced with posting-only rule (`posts_directly = true`). The leaf-only rule made it impossible to flag parent accounts that post directly in QuickBooks (e.g., "Revenue – Tuition" containing a "Tuition Discounts" subtree), producing incorrect Ed Program Dollars math. See Migration 005 and Section 4.11 (Deprecated rules). Budget refactor pushed to Migration 006; subsequent migrations renumbered. Appendix D added for known tactical gaps.
 - **v1.3** — April 27, 2026 — Migration 006: default privileges set on public schema. GRANT discipline resolved systemically. Appendix D entry updated from open issue to resolved. Budget refactor renumbered to Migration 007; subsequent migrations renumbered accordingly.
 - **v1.4** — April 27, 2026 — UI corrections sweep: contrast tokens rationalized (`muted` redefined from warm gray `#6B6760` to navy-tinted `#475472` = navy at 80% opacity equivalent; `status-amber` darkened from `#BA7517` to `#8C5410` to pass WCAG AA on cream); back navigation `Breadcrumb` component added and wired into every content page; COA tree posting/summary visual distinction (italic "summary" tag with middot separator); Account Kind helper text tightened. No schema changes.
+- **v2.0** — April 27, 2026 — Conditional hard delete on COA accounts implemented (Migration 007). New Section 4.12 documents the soft-delete (Deactivate) vs hard-delete distinction. The DB function `chart_of_accounts_can_hard_delete(account_id)` returns both a boolean and a human-readable blocking reason; the UI hides the Delete button when the account isn't safe and surfaces the reason via a hover (i) icon next to Deactivate. RLS policy split: `coa_insert` and `coa_update` keep the edit-permission gate (so soft-delete still works at edit level), `coa_delete` requires `admin`. Hard-delete audit logging is automatic via the existing change_log trigger. Function body is structured to extend as Phase 2+ modules add FK references to `chart_of_accounts`.
 
 ---
 
