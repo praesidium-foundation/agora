@@ -851,8 +851,11 @@ function BudgetStage() {
         </div>
 
         <div className="flex-1 flex overflow-hidden">
-          <KpiSidebar kpis={kpis} />
-
+          {/* Detail zone first (left); KPI sidebar after (right). The
+              navy KPI panel against cream surfaces on both sides reads
+              as a clearly bounded element — adjacency to the navy nav
+              sidebar at the page's left edge produced visual collision
+              when the KPIs lived on the left of the detail. */}
           <div className="flex-1 overflow-y-auto px-6 py-2">
             {dataError && (
               <p className="text-status-red text-sm mb-4" role="alert">
@@ -952,6 +955,8 @@ function BudgetStage() {
               </>
             )}
           </div>
+
+          <KpiSidebar kpis={kpis} />
         </div>
       </div>
 

@@ -1009,29 +1009,33 @@ The Budget module is **one module with configurable workflow stages** (per Secti
 │  [Save] [View PDF] [Submit] [Compare ▾]              │
 │  [Scenario tabs ★] [+ New scenario]                  │
 └─────────────────────────────────────────────────────┘
-┌────────────────┬────────────────────────────────────┐
-│  KPI SIDEBAR   │  BUDGET DETAIL ZONE                │
-│  (collapsible) │                                     │
-│                │  ▼ INCOME                           │
-│  Total Income  │     Tuition Revenue   $852,208     │
-│  $1,237,983    │     ...                             │
-│                │                                     │
-│  Total Expense │  ▼ EXPENSES                         │
-│  $1,277,757    │     Personnel        $852,759      │
-│                │     ...                             │
-│  Net Income    │                                     │
-│  -$39,774      │                                     │
-│                │                                     │
-│  Ed Program    │                                     │
-│  Ratio: 0.716  │                                     │
-│  Target: 1.02  │                                     │
-│  ⚠️             │                                     │
-│  ...           │                                     │
-│  [Collapse]    │                                     │
-└────────────────┴────────────────────────────────────┘
+┌────────────────────────────────────┬────────────────┐
+│  BUDGET DETAIL ZONE                │  KPI SIDEBAR   │
+│  (primary content)                 │  (collapsible) │
+│                                     │                │
+│  ▼ INCOME                           │  Total Income  │
+│     Tuition Revenue   $852,208     │  $1,237,983    │
+│     ...                             │                │
+│                                     │  Total Expense │
+│  ▼ EXPENSES                         │  $1,277,757    │
+│     Personnel        $852,759      │                │
+│     ...                             │  Net Income    │
+│                                     │  -$39,774      │
+│                                     │                │
+│                                     │  Ed Program    │
+│                                     │  Ratio: 0.716  │
+│                                     │  Target: 1.02  │
+│                                     │  ⚠️             │
+│                                     │  ...           │
+│                                     │  [Collapse ▸]  │
+└────────────────────────────────────┴────────────────┘
 ```
 
-KPI sidebar collapsible (thin strip with badge when collapsed). Wide screens: default expanded. Narrow screens: default collapsed. Always accessible without scrolling. PDFs render KPIs at top (header treatment), not sidebar — PDFs aren't constrained by screen width.
+**KPI sidebar placement** is on the right of the detail zone, chosen during Phase 2 implementation. The original sketch had the KPI panel on the left of the detail zone, but adjacency to the navy nav sidebar (also left) produced a single undifferentiated dark column at the page's edge — users lost the boundary between nav and KPIs. Right-side placement puts cream surfaces on both sides of the navy KPI panel, reading as a clearly bounded element, and matches standard dashboard convention (primary data first, summary metrics second). State of the layout is not architecturally binding; either side is acceptable as long as it doesn't collide with nav chrome.
+
+**KPI sidebar collapsibility**: thin strip with vertical "KPI" label when collapsed. Wide screens (≥1200px): default expanded. Narrow screens (<1200px): default collapsed. State persists per user via `localStorage` (`agora.kpiSidebar.collapsed`). Chevron points inward (◂) when collapsed and outward (▸) when expanded, matching the spatial intuition for a right-anchored panel.
+
+PDFs render KPIs at top (header treatment), not as a sidebar — PDFs aren't constrained by screen width.
 
 ### 8.2 Source indicators
 

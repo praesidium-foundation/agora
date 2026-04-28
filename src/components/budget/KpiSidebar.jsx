@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react'
 
-// Collapsible KPI sidebar. Default expanded on screens >= 1200px (per
-// architecture Section 8.1), collapsed otherwise. State persists per-
-// session via localStorage.
+// Collapsible KPI sidebar, rendered on the RIGHT side of the budget
+// detail zone (architecture Section 8.1). Right-side placement avoids
+// adjacency-collision with the navy nav sidebar on the left and matches
+// standard dashboard convention (primary data on the left, summary
+// metrics on the right).
+//
+// Default expanded on screens >= 1200px, collapsed otherwise. State
+// persists per-user via localStorage; the chevron points inward (left,
+// ◂) when collapsed to suggest "click here to expand inward" and outward
+// (right, ▸) when expanded to suggest "click here to collapse outward."
 //
 // Props:
 //   kpis: {
@@ -16,7 +23,7 @@ import { useEffect, useState } from 'react'
 // Student, etc.) keep their "Pending [Module]" subtitles per Section I
 // of the build spec.
 
-const STORAGE_KEY = 'agora.budget.kpiSidebarCollapsed'
+const STORAGE_KEY = 'agora.kpiSidebar.collapsed'
 
 function loadInitialCollapsed() {
   try {
@@ -84,6 +91,8 @@ function KpiSidebar({ kpis }) {
   }, [collapsed])
 
   if (collapsed) {
+    // Collapsed strip on the right edge. Chevron points LEFT (◂) to
+    // suggest "click to expand inward toward the detail zone."
     return (
       <button
         type="button"
@@ -91,10 +100,10 @@ function KpiSidebar({ kpis }) {
         aria-label="Expand KPI panel"
         className="bg-navy text-gold/70 hover:text-gold w-9 flex-shrink-0 flex flex-col items-center pt-4 gap-2 cursor-pointer transition-colors"
       >
-        <span className="text-[14px]" aria-hidden="true">▸</span>
+        <span className="text-[14px]" aria-hidden="true">◂</span>
         <span
           className="font-display text-[10px] tracking-[0.2em] uppercase"
-          style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+          style={{ writingMode: 'vertical-rl' }}
         >
           KPI
         </span>
@@ -123,13 +132,15 @@ function KpiSidebar({ kpis }) {
         <span className="font-display text-[12px] text-gold/85 tracking-[0.14em] uppercase">
           Key Metrics
         </span>
+        {/* Expanded panel, right-side chevron points RIGHT (▸) to
+            suggest "click to collapse outward toward the page edge." */}
         <button
           type="button"
           onClick={() => setCollapsed(true)}
           aria-label="Collapse KPI panel"
           className="text-gold/60 hover:text-gold text-[12px] leading-none"
         >
-          ◂
+          ▸
         </button>
       </div>
 
