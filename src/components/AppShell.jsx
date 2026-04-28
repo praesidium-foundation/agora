@@ -511,9 +511,15 @@ function AppShell({ children }) {
                       style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
                     >
                       <div className="overflow-hidden">
-                        {section.items.map((item) => (
+                        {section.items.map((item, idx) => (
+                          // Step is included in the key so two slot
+                          // placeholders that briefly share label '—'
+                          // (during the workflow-stages async load)
+                          // don't collide on `${section.id}-${label}`.
+                          // Index is the final tiebreaker for sections
+                          // whose items don't carry step numbers.
                           <NavItem
-                            key={`${section.id}-${item.label}`}
+                            key={`${section.id}-${item.step ?? 'x'}-${idx}-${item.label}`}
                             item={item}
                             lockedCodes={lockedCodes}
                           />
@@ -521,9 +527,9 @@ function AppShell({ children }) {
                       </div>
                     </div>
                   ) : (
-                    section.items.map((item) => (
+                    section.items.map((item, idx) => (
                       <NavItem
-                        key={`top-${item.label}`}
+                        key={`top-${idx}-${item.label}`}
                         item={item}
                         lockedCodes={lockedCodes}
                       />
