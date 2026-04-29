@@ -95,6 +95,7 @@ function HeaderZone({
   onResetClick,
   onAddAccountClick,
   onSaveClick,
+  onViewPdfClick,
   onSubmitLockClick,
   resetting,
   canEdit,
@@ -198,9 +199,14 @@ function HeaderZone({
               onClick={onSaveClick}
             />
             <ActionButton
-              disabled
+              disabled={!scenarioForActions}
               label="View PDF"
-              title="PDF rendering ships in the next commit (F)."
+              title={
+                !scenarioForActions
+                  ? 'No scenario to print.'
+                  : 'Open the browser print dialog. Save as PDF, or print directly. Polished print layout (DRAFT watermark, approved-by footer, narrative block) ships in the next commit (F).'
+              }
+              onClick={onViewPdfClick}
             />
             <ActionButton
               disabled={submitDisabled}
@@ -882,6 +888,16 @@ function BudgetStage() {
 
   return (
     <AppShell>
+      {/* DRAFT print marker — display:none on screen, visible only at the
+          top of the print dialog when state != 'locked'. Section 2.5
+          says non-final outputs must be DRAFT-marked; this is the
+          minimum stub. Commit F replaces it with a diagonal watermark
+          + header banner + footer note. */}
+      {activeScenario && activeScenario.state !== 'locked' && (
+        <div className="draft-print-marker hidden">
+          DRAFT — {activeScenario.state.toUpperCase().replace(/_/g, ' ')}
+        </div>
+      )}
       <div className="-mx-6 -my-6 flex flex-col h-[calc(100vh-3.5rem)]">
         <div className="px-6">
           <HeaderZone
@@ -897,6 +913,7 @@ function BudgetStage() {
             onResetClick={handleResetScenarioLines}
             onAddAccountClick={() => setAddAccountOpen(true)}
             onSaveClick={() => toast.success('All changes are saved.')}
+            onViewPdfClick={() => window.print()}
             onSubmitLockClick={() => setSubmitLockOpen(true)}
             resetting={resetting}
             canEdit={canEdit && canEditCoa}
