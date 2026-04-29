@@ -123,11 +123,38 @@ function ScenarioTab({ scenario, active, onSelect, onAction, canEdit }) {
       </div>
 
       {menuOpen && (
+        // Dropdown anchors to the LEFT edge of the kebab and extends
+        // right. The earlier `right-0` placement extended left, which
+        // for the typical leftmost scenario tab pushed the dropdown
+        // past the page's left edge and into the nav sidebar's space —
+        // visible as clipped fragments. left-0 keeps the dropdown
+        // within the page content. z-50 layers above the sticky
+        // header (z-20) and the KPI sidebar (no explicit z), so the
+        // dropdown is never clipped by other UI.
         <div
           onClick={(e) => e.stopPropagation()}
           role="menu"
-          className="absolute right-0 top-full mt-1 w-56 bg-white border-[0.5px] border-card-border rounded-[8px] shadow-lg z-30 py-1"
+          className="absolute left-0 top-full mt-1 w-56 bg-white border-[0.5px] border-card-border rounded-[8px] shadow-lg z-50 py-1"
         >
+          {/* Recommended toggle pinned to the top with a star icon —
+              recommendation is the most consequential action and
+              the gate for the lock workflow (Section 8.9). */}
+          {!scenario.is_recommended ? (
+            <MenuItem
+              onClick={() => { setMenuOpen(false); onAction('recommend') }}
+              icon={<span className="text-gold text-[12px]">★</span>}
+            >
+              Mark as recommended
+            </MenuItem>
+          ) : (
+            <MenuItem
+              disabled
+              icon={<span className="text-gold text-[12px]">★</span>}
+            >
+              Recommended scenario
+            </MenuItem>
+          )}
+          <div className="border-t-[0.5px] border-card-border my-1" />
           <MenuItem
             onClick={() => { setMenuOpen(false); onAction('rename') }}
           >
@@ -137,13 +164,6 @@ function ScenarioTab({ scenario, active, onSelect, onAction, canEdit }) {
             onClick={() => { setMenuOpen(false); onAction('description') }}
           >
             Edit description…
-          </MenuItem>
-          <MenuItem
-            onClick={() => { setMenuOpen(false); onAction('recommend') }}
-            disabled={scenario.is_recommended}
-            checkmark={scenario.is_recommended}
-          >
-            {scenario.is_recommended ? 'Already recommended' : 'Mark as recommended'}
           </MenuItem>
           <div className="border-t-[0.5px] border-card-border my-1" />
           <MenuItem
@@ -160,7 +180,7 @@ function ScenarioTab({ scenario, active, onSelect, onAction, canEdit }) {
   )
 }
 
-function MenuItem({ children, onClick, disabled, danger, checkmark, title }) {
+function MenuItem({ children, onClick, disabled, danger, icon, title }) {
   return (
     <button
       type="button"
@@ -177,7 +197,7 @@ function MenuItem({ children, onClick, disabled, danger, checkmark, title }) {
       }`}
     >
       <span className="flex items-center gap-2">
-        {checkmark && <span className="text-status-green text-[12px]">✓</span>}
+        {icon && <span className="flex-shrink-0">{icon}</span>}
         <span>{children}</span>
       </span>
     </button>

@@ -94,6 +94,7 @@ function HeaderZone({
   onScenarioAction,
   onResetClick,
   onAddAccountClick,
+  onSaveClick,
   onSubmitLockClick,
   resetting,
   canEdit,
@@ -109,20 +110,51 @@ function HeaderZone({
     return () => window.removeEventListener('click', close)
   }, [menuOpen])
 
+  // Header button gating (architecture Section 8.12):
+  //
+  //   Save             — enabled when a scenario exists AND state is
+  //                      drafting AND user has edit permission. The
+  //                      underlying interaction is direct-edit-with-undo
+  //                      so saves are implicit on blur; Save is a
+  //                      confidence affordance ("yes, your changes are
+  //                      persisted") that surfaces a toast on click.
+  //   View PDF         — Commit F deliverable; remains a placeholder
+  //                      here with a tooltip that explains the schedule
+  //                      rather than misleading the user about what's
+  //                      gating it.
+  //   Submit for Lock  — enabled only when scenario state = drafting
+  //   Review             AND user has submit_lock (or admin) AND
+  //                      is_recommended = true. The recommended
+  //                      requirement is surfaced inline below the
+  //                      buttons so users discover it without trial.
+  const saveDisabled =
+    !scenarioForActions ||
+    !canEdit ||
+    scenarioForActions.state !== 'drafting'
+
   const submitDisabled =
     !scenarioForActions ||
     !canSubmitLock ||
     !scenarioForActions.is_recommended ||
     scenarioForActions.state !== 'drafting'
 
+  // Inline-hint condition: every gate other than is_recommended is
+  // satisfied. We don't want to nag the user with this hint when the
+  // problem is something else (wrong state, wrong permission).
+  const showRecommendedHint =
+    !!scenarioForActions &&
+    !!canSubmitLock &&
+    scenarioForActions.state === 'drafting' &&
+    !scenarioForActions.is_recommended
+
   const submitTooltip = !scenarioForActions
     ? 'No scenario selected'
     : !canSubmitLock
       ? 'Submit for lock review requires submit_lock permission.'
-      : !scenarioForActions.is_recommended
-        ? 'Mark this scenario as recommended before submitting for lock review.'
-        : scenarioForActions.state !== 'drafting'
-          ? `Scenario is ${scenarioForActions.state}; submit not available in this state.`
+      : scenarioForActions.state !== 'drafting'
+        ? `Scenario is ${scenarioForActions.state}; submit not available in this state.`
+        : !scenarioForActions.is_recommended
+          ? 'This scenario must be marked as recommended before it can be locked. Use the scenario tab menu (⋮) to mark it.'
           : 'Submit for lock review.'
 
   // Stage display: prefer the configured display_name; short_name in
@@ -151,8 +183,25 @@ function HeaderZone({
              scenarioForActions.state === 'drafting' && (
               <ActionButton label="+ Add Account" onClick={onAddAccountClick} />
             )}
-            <ActionButton disabled label="Save" title="Auto-saves on edit; manual Save lands later" />
-            <ActionButton disabled label="View PDF" title="PDF lands in Commit F" />
+            <ActionButton
+              disabled={saveDisabled}
+              label="Save"
+              title={
+                saveDisabled
+                  ? !scenarioForActions
+                    ? 'No scenario selected'
+                    : !canEdit
+                      ? 'Edit permission required'
+                      : `Scenario is ${scenarioForActions.state}; cannot save in this state.`
+                  : 'Confirm changes are saved (changes auto-save on edit).'
+              }
+              onClick={onSaveClick}
+            />
+            <ActionButton
+              disabled
+              label="View PDF"
+              title="PDF rendering ships in the next commit (F)."
+            />
             <ActionButton
               disabled={submitDisabled}
               label="Submit for Lock Review"
@@ -201,6 +250,19 @@ function HeaderZone({
           </div>
         </div>
       </div>
+
+      {/* Recommended-scenario inline hint. Visible only when the
+          recommended condition is the specific blocker on Submit
+          (state is drafting, user has submit_lock, scenario is not
+          marked recommended). Hidden when the blocker is something
+          else (wrong state, missing permission) so we don't nag the
+          user with a non-actionable hint. */}
+      {showRecommendedHint && (
+        <p className="mt-2 text-right font-body italic text-[12px] text-muted leading-relaxed">
+          Mark this scenario as <span className="text-gold not-italic">★</span>{' '}
+          recommended (via the scenario tab menu) before submitting for lock review.
+        </p>
+      )}
 
       {scenarios.length > 0 && (
         <div className="mt-3 -mb-3 border-b-[0.5px] border-card-border">
@@ -834,6 +896,7 @@ function BudgetStage() {
             onScenarioAction={handleScenarioAction}
             onResetClick={handleResetScenarioLines}
             onAddAccountClick={() => setAddAccountOpen(true)}
+            onSaveClick={() => toast.success('All changes are saved.')}
             onSubmitLockClick={() => setSubmitLockOpen(true)}
             resetting={resetting}
             canEdit={canEdit && canEditCoa}
