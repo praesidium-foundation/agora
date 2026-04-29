@@ -140,7 +140,7 @@ export default function BudgetActivityPrint() {
       generatedByName={printerName}
       backTo={`/modules/budget/${data.stage.id}`}
     >
-      <section className="mb-5 print-category">
+      <section className="mb-5">
         <p className="font-body text-[11pt] text-body">
           {events.length} event{events.length === 1 ? '' : 's'} recorded.
           {firstEventDate && lastEventDate && (
@@ -191,7 +191,7 @@ function PrintFeedRow({ event }) {
   }
 
   return (
-    <li className={`print-leaf ${cls}`}>
+    <li className={cls}>
       <div className="flex items-baseline justify-between gap-3">
         <span className="font-body text-body text-[10.5pt]">
           {event.kind === 'lock' && (

@@ -275,10 +275,8 @@ export default function BudgetDetailPrint() {
         <Narrative text={bundle.scenario.narrative} />
       )}
 
-      <div className="mt-6">
-        <TopGroupPrint group={tree.income} />
-        <TopGroupPrint group={tree.expense} />
-      </div>
+      <TopGroupPrint group={tree.income} />
+      <TopGroupPrint group={tree.expense} />
     </PrintShell>
   )
 }
@@ -306,6 +304,11 @@ function StateIndicator({ draft, stateLabel, snapshot, lockedByName }) {
   )
 }
 
+// KPI summary — compact two-column key/value grid. The grid itself is
+// allowed to break across pages if it must (no print-category here);
+// keeping it small enough that this rarely happens. After the KPIs,
+// the budget detail begins immediately on the same page if there's
+// room — no forced page-break.
 function KpiSummary({ kpis }) {
   if (!kpis) return null
   const rows = [
@@ -318,7 +321,7 @@ function KpiSummary({ kpis }) {
     ['% Personnel', kpis.pctPersonnel != null ? `${(kpis.pctPersonnel * 100).toFixed(1)}%` : '—'],
   ]
   return (
-    <section className="mt-1 mb-5 grid grid-cols-2 gap-x-8 gap-y-1 text-[12px] print-category">
+    <section className="mt-1 mb-3 grid grid-cols-2 gap-x-8 gap-y-1 text-[12px]">
       <h2 className="col-span-2 font-display text-navy text-[12px] tracking-[0.10em] uppercase mb-1">
         Summary
       </h2>
@@ -343,7 +346,7 @@ function KpiSummary({ kpis }) {
 
 function Narrative({ text }) {
   return (
-    <section className="mt-3 mb-6 print-category">
+    <section className="mt-3 mb-4">
       <h2 className="font-display text-navy text-[12px] tracking-[0.10em] uppercase mb-2">
         Narrative
       </h2>
@@ -354,20 +357,52 @@ function Narrative({ text }) {
   )
 }
 
-// Hierarchical body. Same shape as BudgetDetailZone but stripped of
-// editing affordances. Pass-thru accounts are filtered upstream by the
-// tree builders, so we don't need to filter again here.
+// ============================================================================
+// Hierarchical body — four-tier visual treatment per architecture §10.4.
+//
+//   Tier 1: top-level categories (INCOME / EXPENSES) — Cinzel 16pt navy,
+//           gold underline, full-width row, vertical breathing room
+//   Tier 2: first-level summary children of a category (Educational
+//           Program Revenue, Personnel, Facilities, etc.) — EB Garamond
+//           13pt bold navy, thin navy underline @ 30%, ~95% width
+//   Tier 3: deeper summary nodes (Revenue – Tuition, Tuition Discounts,
+//           Payroll, etc.) — EB Garamond 12pt bold navy, no rule, ~85% width
+//   Tier 4: leaf posting accounts — EB Garamond 11pt navy @ 80%, regular
+//           weight, code in 50px left column, ~75% width
+//
+// Indentation: 24px per tier (Tier 1 at 0, Tier 2 at 24, Tier 3 at 48,
+// Tier 4 at 72). Indentation is the structural backbone; weight/size/
+// rules reinforce.
+//
+// Page-break behavior (driven via .print-tier-2 / .print-tier-3-header
+// in print.css):
+//   - Tier 2 blocks: break-inside: avoid → stay together when possible
+//   - Tier 3 headers: break-after: avoid → keep header with first child
+//   - Tier 1 / Tier 4: break freely (a category that always wants to
+//     stay together would force a new page on every category)
+// ============================================================================
+
+// Render a tier-1 category (INCOME or EXPENSES) and its full subtree.
 function TopGroupPrint({ group }) {
   return (
-    <section className="print-category mt-4">
-      <header className="flex items-center gap-3 px-1 py-1.5 border-b-[1px] border-navy">
-        <span className="font-display text-navy text-[13px] tracking-[0.12em] uppercase flex-1">
+    <section className="mt-6 print-tier-1">
+      <header
+        className="flex items-baseline gap-3 pb-1 mb-3"
+        style={{
+          borderBottom: '1pt solid rgba(215, 191, 103, 0.6)', // gold @ 60%
+          paddingTop: '6pt',
+          paddingBottom: '4pt',
+        }}
+      >
+        <span
+          className="font-display text-navy flex-1"
+          style={{ fontSize: '16pt', letterSpacing: '0.05em' }}
+        >
           {group.label}
         </span>
         <span
-          className={`font-display tabular-nums text-[13px] ${
-            group.total < 0 ? 'text-status-red' : 'text-navy'
-          }`}
+          className={`font-display tabular-nums ${group.total < 0 ? 'text-status-red' : 'text-navy'}`}
+          style={{ fontSize: '16pt' }}
         >
           {fmtUsd(group.total)}
         </span>
@@ -378,68 +413,175 @@ function TopGroupPrint({ group }) {
         </p>
       ) : (
         group.children.map((node) => (
-          <RowPrint key={node.id} node={node} depth={0} />
+          <Tier2Block key={node.id} node={node} />
         ))
       )}
     </section>
   )
 }
 
-function RowPrint({ node, depth }) {
-  const isPosting = node.posts_directly
-  const hasLine = node.line !== null
-  const amount = hasLine ? node.line.amount : 0
-  const isInactive = node.is_active === false
-  const indentPx = 16 * (depth + 1)
+// Tier 2: top-level summary block. break-inside: avoid in print so
+// "Personnel" and its dozen leaves stay together when possible.
+//
+// If the Tier 2 node IS a posting leaf itself (rare — a top-level
+// category child that's also a leaf), render it as a single-row
+// posting line at the Tier 2 width.
+function Tier2Block({ node }) {
+  const isLeafItself = node.posts_directly && node.children.length === 0
+
+  if (isLeafItself) {
+    // Render as a Tier 4 leaf at Tier 2 indent. Same alignment math as
+    // the leaf renderer, just at a different starting indent.
+    return <LeafRow node={node} depth={1} />
+  }
 
   return (
-    <>
-      <div
-        className={`flex items-center gap-3 py-1 border-b-[0.5px] border-card-border print-leaf ${
-          isInactive ? 'opacity-60' : ''
-        }`}
-        style={{ paddingLeft: `${indentPx}px` }}
+    <section className="print-tier-2 mt-4 mb-2" style={{ paddingLeft: '24px' }}>
+      <header
+        className="flex items-baseline gap-3 pb-1 mb-1"
+        style={{
+          borderBottom: '0.5pt solid rgba(25, 42, 79, 0.3)', // navy @ 30%
+          maxWidth: '95%',
+          paddingTop: '6pt',
+        }}
       >
-        {node.code && (
-          <span className="font-body text-[10pt] text-muted tabular-nums w-12 flex-shrink-0">
-            {node.code}
-          </span>
-        )}
-        {!node.code && <span className="w-12 flex-shrink-0" />}
-
         <span
-          className={`font-body flex-1 min-w-0 truncate ${
-            isPosting ? 'text-body' : 'text-navy tracking-[0.04em]'
-          }`}
+          className="font-body font-bold text-navy flex-1 truncate"
+          style={{ fontSize: '13pt' }}
         >
           {node.name}
-          {isInactive && (
-            <span className="ml-2 italic text-[9pt] text-muted">(inactive)</span>
-          )}
         </span>
+        <span
+          className={`font-body font-bold tabular-nums ${node.rollup < 0 ? 'text-status-red' : 'text-navy'}`}
+          style={{ fontSize: '13pt' }}
+        >
+          {fmtUsd(node.rollup)}
+        </span>
+      </header>
+      {node.children.map((child) => (
+        <SubtreeRenderer key={child.id} node={child} depth={2} />
+      ))}
+    </section>
+  )
+}
 
-        {isPosting ? (
-          <span
-            className={`text-right tabular-nums w-24 flex-shrink-0 ${
-              amount < 0 ? 'text-status-red' : 'text-body'
-            }`}
-          >
-            {fmtUsd(amount)}
-          </span>
-        ) : (
-          <span
-            className={`text-right tabular-nums w-24 flex-shrink-0 font-medium ${
-              node.rollup < 0 ? 'text-status-red' : 'text-navy'
-            }`}
-          >
-            {fmtUsd(node.rollup)}
+// Recursive subtree renderer for Tier 3 / Tier 4. Decides per-node
+// whether it's a summary (renders as Tier 3 header + recursed children)
+// or a leaf (renders as Tier 4 row).
+//
+// `depth` here is the tier number we're at (2 = directly inside Tier 2,
+// 3 = Tier 3, 4 = Tier 4). All Tier 3 and below clamp to Tier 4 styling
+// for leaves regardless of actual tree depth — keeps the visual
+// hierarchy at four tiers even when the underlying COA has deeper
+// nesting.
+function SubtreeRenderer({ node, depth }) {
+  const isPosting = node.posts_directly
+  const hasChildren = node.children.length > 0
+
+  if (isPosting && !hasChildren) {
+    // Leaf — Tier 4 styling regardless of depth.
+    return <LeafRow node={node} depth={depth} />
+  }
+
+  // Summary: Tier 3 header (or deeper-nested clamp) + recursed children.
+  return (
+    <div className="mb-1">
+      <Tier3Header node={node} depth={depth} />
+      {node.children.map((child) => (
+        <SubtreeRenderer
+          key={child.id}
+          node={child}
+          depth={Math.min(depth + 1, 4)}
+        />
+      ))}
+    </div>
+  )
+}
+
+function Tier3Header({ node, depth }) {
+  // Indent matches tier (24 / 48 / 72). Rare deeper nesting clamps at 72.
+  const indentPx = Math.min(24 * depth, 72)
+  return (
+    <div
+      className="print-tier-3-header flex items-baseline gap-3"
+      style={{
+        paddingLeft: `${indentPx}px`,
+        maxWidth: '85%',
+        paddingTop: '6pt',
+        paddingBottom: '3pt',
+      }}
+    >
+      <span
+        className="font-body font-bold text-navy flex-1 truncate"
+        style={{ fontSize: '12pt' }}
+      >
+        {node.name}
+      </span>
+      <span
+        className={`font-body font-bold tabular-nums ${node.rollup < 0 ? 'text-status-red' : 'text-navy'}`}
+        style={{ fontSize: '12pt' }}
+      >
+        {fmtUsd(node.rollup)}
+      </span>
+    </div>
+  )
+}
+
+// Tier 4 leaf row.
+//
+// Three-column layout inside the row:
+//   [code: 50px, navy @ 60%] [name: flex, navy @ 80%] [amount: right]
+//
+// Container max-width is 75% so the right edge sits ~25% away from the
+// page edge — the eye associates name with amount as one cohesive unit.
+function LeafRow({ node, depth }) {
+  const indentPx = 24 * depth // depth=1 (Tier 2 leaf) → 24, depth=4 → 96
+  const amount = node.line ? node.line.amount : 0
+  const isInactive = node.is_active === false
+  return (
+    <div
+      className={`flex items-baseline gap-3 ${isInactive ? 'opacity-70' : ''}`}
+      style={{
+        paddingLeft: `${indentPx}px`,
+        maxWidth: '75%',
+        paddingTop: '2pt',
+        paddingBottom: '2pt',
+      }}
+    >
+      <span
+        className="font-body tabular-nums flex-shrink-0"
+        style={{
+          width: '50px',
+          fontSize: '10pt',
+          color: 'rgba(25, 42, 79, 0.6)', // navy @ 60%
+        }}
+      >
+        {node.code || ''}
+      </span>
+      <span
+        className="font-body flex-1 min-w-0 truncate"
+        style={{
+          fontSize: '11pt',
+          color: 'rgba(25, 42, 79, 0.85)', // navy @ ~85% — slightly muted but
+                                            // comfortably above WCAG AA on white
+        }}
+      >
+        {node.name}
+        {isInactive && (
+          <span className="ml-2 italic" style={{ fontSize: '9pt', color: '#475472' }}>
+            (inactive)
           </span>
         )}
-      </div>
-
-      {node.children.map((child) => (
-        <RowPrint key={child.id} node={child} depth={depth + 1} />
-      ))}
-    </>
+      </span>
+      <span
+        className={`font-body tabular-nums ${amount < 0 ? 'text-status-red' : ''}`}
+        style={{
+          fontSize: '11pt',
+          color: amount < 0 ? undefined : 'rgba(25, 42, 79, 0.85)',
+        }}
+      >
+        {fmtUsd(amount)}
+      </span>
+    </div>
   )
 }

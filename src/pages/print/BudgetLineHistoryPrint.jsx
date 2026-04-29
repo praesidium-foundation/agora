@@ -215,7 +215,7 @@ function PrintEvent({ event }) {
   const deleteField = event.fields.find((f) => f.field_name === '__delete__')
 
   return (
-    <li className={`print-leaf ${cls}`}>
+    <li className={cls}>
       <div className="flex items-baseline justify-between gap-3 mb-0.5">
         <span className="font-body text-body text-[11pt] font-medium">
           {labelForKind(event.kind)}
