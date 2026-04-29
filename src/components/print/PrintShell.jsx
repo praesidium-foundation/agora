@@ -92,19 +92,21 @@ export default function PrintShell({
     <div className="print-page bg-cream-highlight min-h-screen">
       {/* On-screen-only preview chrome. Single line: Back link, Print
           button. Document title is intentionally NOT here — it belongs
-          inside the document. */}
-      <div className="print-preview-chrome no-print sticky top-0 z-10 bg-cream-highlight border-b-[0.5px] border-card-border px-6 py-3 flex items-center justify-between shadow-sm">
+          inside the document. The bar styling lives in print.css under
+          .print-preview-chrome so the @media print suppression rule
+          can reliably target the same selector. */}
+      <div className="print-preview-chrome no-print">
         <button
           type="button"
           onClick={() => navigate(backTo)}
-          className="print-preview-back-link font-body text-sm text-muted hover:text-navy"
+          className="print-preview-back-link"
         >
           ← {backLabel}
         </button>
         <button
           type="button"
           onClick={reprint}
-          className="print-preview-print-button bg-navy text-gold border-[0.5px] border-navy px-4 py-1.5 rounded text-sm font-body hover:opacity-90 transition-opacity"
+          className="print-preview-print-button"
         >
           Print
         </button>
@@ -136,27 +138,36 @@ export default function PrintShell({
       {/* Document body. Surface is white inside the cream-highlight
           screen wrap; in print the cream-highlight is suppressed. */}
       <article className="print-document bg-white max-w-[7.5in] mx-auto my-6 px-10 py-10 shadow-sm">
-        <header className="print-letterhead pb-5 mb-6 border-b-[1px] border-navy/40">
+        <header className="print-letterhead pb-3 mb-4 border-b-[1px] border-navy/40">
+          {/* Letterhead row uses items-start (NOT items-center, NOT
+              items-stretch) so the image's intrinsic aspect ratio is
+              preserved. align-items: stretch in flex would force the
+              image to fill the row's computed height — which combined
+              with a fixed width would distort the wordmark. */}
           <div className="flex items-start justify-between gap-6">
-            {/* Full horizontal color logo on the first page. The print
-                stylesheet hides this on subsequent pages (only the
-                running text header carries identity then). */}
+            {/* Full horizontal color logo on the first page. Width is
+                set explicitly; height is auto so the browser computes
+                it from the image's intrinsic aspect ratio. NO fixed
+                height anywhere in the chain — that was the cause of
+                the wordmark vertical compression in the previous pass.
+                The print stylesheet preserves aspect ratio defensively
+                with object-fit: contain. */}
             <img
               src="/logo-horizontal-color.png"
               alt={schoolName}
-              className="print-logo h-[64px] w-auto"
-              style={{ maxWidth: '240px' }}
+              className="print-logo"
+              style={{ width: '220px', height: 'auto' }}
             />
             <div className="text-right">
               <h1 className="font-display text-navy text-[22px] leading-tight">
                 {title}
               </h1>
               {subtitle && (
-                <p className="font-body italic text-muted text-[13px] mt-1">
+                <p className="font-body italic text-muted text-[13px]" style={{ marginTop: '4pt' }}>
                   {subtitle}
                 </p>
               )}
-              <p className="font-body text-[10px] text-muted mt-2 tracking-wider uppercase">
+              <p className="font-body text-[10px] text-muted tracking-wider uppercase" style={{ marginTop: '4pt' }}>
                 Generated {generatedDateStr} at {generatedTimeStr}
                 {generatedByName ? ` by ${generatedByName}` : ''}
               </p>

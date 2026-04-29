@@ -1,28 +1,75 @@
 /* ============================================================================
-   Print styles — Phase 2 Commit F + visual polish
+   Print styles — Phase 2 Commit F + visual polish (v3.0) + density (v3.1)
    ----------------------------------------------------------------------------
    Scope: applies to elements inside `.print-page` (the wrapper rendered by
    PrintShell). The dedicated print routes /print/budget/... are SEPARATE
    page trees from the editing UI — no AppShell, no global header, no nav
-   sidebar — so most of the prior media-print rules to "hide chrome" are
-   no longer needed. What remains here is the actual print layout: page
-   geometry, watermark, running headers, tier-aware hierarchy treatment,
-   and tweaks for the document body.
+   sidebar. What lives here is the actual print layout: page geometry,
+   watermark, running headers, tier-aware hierarchy treatment, page-break
+   orphan prevention, and chrome treatment for on-screen preview.
 
    Architecture references:
      §2.5  DRAFT marking on non-final outputs
      §2.6  Approved-by indicator on locked outputs
      §5.3  HTML-to-PDF render path (window.print() + this stylesheet)
-     §10.4 PDF-Specific Standards (margins, fonts, contrast, hierarchy)
+     §10.4 PDF-Specific Standards (margins, fonts, contrast, hierarchy,
+            spacing, page-break orphan prevention)
    ============================================================================ */
 
 /* ----- @page geometry -----------------------------------------------------
-   US Letter, portrait. 0.75-inch margins side and bottom; 1-inch top to
-   leave headroom for the running text header on pages 2+. The first
-   page's full-bleed letterhead sits beneath the running header band. */
+   US Letter, portrait. Side and bottom 0.75-inch (§10.4 minimum); top
+   0.95-inch to leave headroom for the running text header at 0.35in. */
 @page {
   size: letter portrait;
   margin: 0.95in 0.75in 1in 0.75in;
+}
+
+/* ----- on-screen preview chrome (NOT print) -----------------------------
+   The chrome bar is a clear UI element distinct from the document. Sticky
+   at the top of the viewport so it's reachable from anywhere; cream-
+   highlight surface against the cream-highlight page background gives
+   subtle contrast, with a navy@15% bottom rule and a soft drop shadow
+   below to visually separate it from the document. */
+.print-preview-chrome {
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: #F5F0E0; /* cream-highlight */
+  border-bottom: 1px solid rgba(25, 42, 79, 0.15);
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
+}
+.print-preview-back-link {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 14px;
+  color: #475472; /* muted */
+  background: transparent;
+  border: 0;
+  padding: 6px 4px;
+  cursor: pointer;
+}
+.print-preview-back-link:hover {
+  color: #192A4F; /* navy */
+  text-decoration: underline;
+}
+.print-preview-print-button {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 14px;
+  background: #192A4F;
+  color: #D7BF67;
+  border: 0.5px solid #192A4F;
+  padding: 8px 18px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 150ms;
+}
+.print-preview-print-button:hover {
+  opacity: 0.9;
 }
 
 /* ----- on-screen vs print element gating --------------------------------- */
@@ -30,7 +77,9 @@
 .print-page .print-only { display: none; }
 
 @media print {
-  /* Hide on-screen-only chrome. */
+  /* Hide on-screen-only chrome — defense in depth: target the wrapper
+     AND the inner buttons in case any descendant style fights the
+     wrapper rule. */
   .no-print,
   .print-preview-chrome,
   .print-preview-back-link,
@@ -39,17 +88,13 @@
   }
   .print-only { display: block !important; }
 
-  /* Force everything to print backgrounds explicitly. The cream-highlight
-     wrap on screen is meant to make the white document pop; in print we
-     want pure white. */
+  /* Force pure white print surface; cream-highlight is screen-only. */
   html, body, .print-page, .print-document {
     background: white !important;
     color: #192A4F !important;
   }
 
-  /* Drop the screen-side max-width centering and the box shadow — the
-     @page margins handle width, and the document should fill the
-     printable area. */
+  /* Drop the screen-side max-width centering and the box shadow. */
   .print-document {
     max-width: none !important;
     margin: 0 !important;
@@ -57,17 +102,15 @@
     box-shadow: none !important;
   }
 
-  /* Logo: ensure raster scales crisply. The horizontal color PNG ships
-     at enough resolution for ~240px @ print DPI. */
+  /* Logo aspect ratio safety net. The inline style sets width + height
+     auto on the img, but if any parent flex container forces stretch
+     behavior these rules pin the image to its intrinsic ratio. */
   .print-logo {
     image-rendering: -webkit-optimize-contrast;
+    height: auto !important;
+    object-fit: contain;
+    align-self: flex-start;
   }
-
-  /* First-page letterhead suppressed on subsequent pages. Browsers
-     can't reliably target "first page only" via @page rules, so we
-     render the letterhead inline at the top of the document and rely
-     on the running text header (fixed-position, repeats per page) to
-     identify pages 2+. */
 
   /* Diagonal "DRAFT" watermark, repeated per page via position:fixed. */
   .print-watermark {
@@ -83,15 +126,14 @@
     font-size: 130pt;
     font-weight: 600;
     letter-spacing: 0.3em;
-    color: rgba(163, 45, 45, 0.10); /* status-red @ 10% */
+    color: rgba(163, 45, 45, 0.10);
     pointer-events: none;
     z-index: 0;
   }
 
-  /* Running text header — repeats on every page including page 1.
-     On page 1 it sits above the inline letterhead; on subsequent
-     pages it's the only identifier. Lightweight enough to not feel
-     heavy when repeated. */
+  /* Running text header — repeats on every page. Lightweight enough to
+     not feel heavy on repeat. On page 1 it sits above the inline
+     letterhead; on subsequent pages it carries identity alone. */
   .print-running-header {
     position: fixed;
     top: 0.35in;
@@ -125,18 +167,26 @@
   }
 
   /* ----- Hierarchy: page-break behavior per tier (§10.4) ----------------
-     Tier 1 (categories) span the whole document — they MUST break across
-     pages, otherwise INCOME alone could push 2+ pages with no break
-     allowed. Do NOT apply break-inside: avoid here.
 
-     Tier 2 (top-level summary blocks like "Personnel") are the unit we
-     try to keep together. break-inside: avoid keeps a Tier 2 block on
-     one page when it fits.
+     Orphan prevention: every Tier 1 category is rendered with its
+     header AND first Tier 2 block inside a single
+     `.print-tier-1-with-first-tier-2` wrapper. break-inside: avoid on
+     that wrapper keeps "EXPENSES" with "Personnel" (its first child);
+     if the pair doesn't fit on the current page, BOTH move to the
+     next page. The remaining Tier 2 siblings render outside the
+     wrapper and are free to break naturally.
 
-     Tier 3 headers should stay with their first child — break-after:
-     avoid on the header row.
+     Each Tier 2 block individually carries break-inside: avoid so a
+     mid-Tier-2 split doesn't happen unless the block itself exceeds a
+     single page (in which case the browser must break — acceptable).
 
-     Tier 4 leaves can break freely; pure leaf-row breaks read fine. */
+     Tier 3 headers carry break-after: avoid so they stay with their
+     first child. Tier 4 leaves break freely.
+  */
+  .print-tier-1-with-first-tier-2 {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   .print-tier-2 {
     break-inside: avoid;
     page-break-inside: avoid;
@@ -146,8 +196,7 @@
     page-break-after: avoid;
   }
 
-  /* Page-number footer via @page bottom-center counter (Chrome+Safari;
-     Firefox falls back to no page numbers — acceptable degrade). */
+  /* Page-number footer via @page bottom-center counter. */
   @page {
     @bottom-center {
       content: "page " counter(page) " of " counter(pages);
@@ -159,11 +208,8 @@
 }
 
 /* ----- on-screen preview (NOT print) -------------------------------------
-   The PrintShell page renders on screen too — we want it to look like a
-   document preview rather than a blank page. The cream-highlight outer
-   wrap + white inner document surface gives a "this is a page" feel.
-   Hide the watermark and running header on screen so they don't clutter
-   the preview; they only appear in actual print. */
+   The watermark and running text header are print-only; suppress on
+   screen so they don't clutter the preview surface. */
 .print-watermark {
   display: none;
 }

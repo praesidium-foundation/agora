@@ -284,18 +284,24 @@ export default function BudgetDetailPrint() {
 function StateIndicator({ draft, stateLabel, snapshot, lockedByName }) {
   if (draft) {
     return (
-      <div className="mb-5 px-4 py-2 border-l-4 border-status-red bg-status-red-bg/40">
+      <div
+        className="border-l-4 border-status-red bg-status-red-bg/40"
+        style={{ paddingTop: '6pt', paddingBottom: '4pt', paddingLeft: '14pt', paddingRight: '14pt', marginBottom: '12pt' }}
+      >
         <p className="font-display text-status-red text-[14px] tracking-wider uppercase">
           DRAFT — {stateLabel}
         </p>
-        <p className="font-body text-muted text-[11px] italic mt-0.5">
+        <p className="font-body text-muted text-[11px] italic" style={{ marginTop: '2pt' }}>
           Not yet approved. This document is for working / review purposes only.
         </p>
       </div>
     )
   }
   return (
-    <div className="mb-5 px-4 py-2 border-l-4 border-navy">
+    <div
+      className="border-l-4 border-navy"
+      style={{ paddingTop: '6pt', paddingBottom: '4pt', paddingLeft: '14pt', paddingRight: '14pt', marginBottom: '12pt' }}
+    >
       <p className="font-display text-navy text-[14px] tracking-wider uppercase">
         LOCKED — Approved {formatLockedDate(snapshot?.locked_at)}
         {lockedByName ? ` by ${lockedByName}` : ''}
@@ -321,14 +327,21 @@ function KpiSummary({ kpis }) {
     ['% Personnel', kpis.pctPersonnel != null ? `${(kpis.pctPersonnel * 100).toFixed(1)}%` : '—'],
   ]
   return (
-    <section className="mt-1 mb-3 grid grid-cols-2 gap-x-8 gap-y-1 text-[12px]">
-      <h2 className="col-span-2 font-display text-navy text-[12px] tracking-[0.10em] uppercase mb-1">
+    <section
+      className="grid grid-cols-2 gap-x-8 gap-y-0 text-[12px]"
+      style={{ marginTop: '2pt', marginBottom: '8pt' }}
+    >
+      <h2
+        className="col-span-2 font-display text-navy text-[12px] tracking-[0.10em] uppercase"
+        style={{ marginBottom: '4pt' }}
+      >
         Summary
       </h2>
       {rows.map(([label, value]) => (
         <div
           key={label}
-          className="flex justify-between border-b-[0.5px] border-card-border py-1"
+          className="flex justify-between border-b-[0.5px] border-card-border"
+          style={{ paddingTop: '6pt', paddingBottom: '6pt', paddingLeft: '12pt', paddingRight: '12pt' }}
         >
           <span className="font-body text-muted">{label}</span>
           <span
@@ -383,40 +396,69 @@ function Narrative({ text }) {
 // ============================================================================
 
 // Render a tier-1 category (INCOME or EXPENSES) and its full subtree.
+//
+// Orphan prevention (§10.4): the Tier 1 header and the FIRST Tier 2
+// child block are rendered inside a single break-inside: avoid wrapper
+// (.print-tier-1-with-first-tier-2). The browser keeps that group
+// together; if it can't fit on the current page, both move to the next
+// page. Subsequent Tier 2 siblings render outside the wrapper and can
+// break naturally — they each retain their own break-inside: avoid so
+// they don't internally split mid-block.
 function TopGroupPrint({ group }) {
+  const [firstChild, ...restChildren] = group.children
   return (
-    <section className="mt-6 print-tier-1">
-      <header
-        className="flex items-baseline gap-3 pb-1 mb-3"
-        style={{
-          borderBottom: '1pt solid rgba(215, 191, 103, 0.6)', // gold @ 60%
-          paddingTop: '6pt',
-          paddingBottom: '4pt',
-        }}
-      >
-        <span
-          className="font-display text-navy flex-1"
-          style={{ fontSize: '16pt', letterSpacing: '0.05em' }}
-        >
-          {group.label}
-        </span>
-        <span
-          className={`font-display tabular-nums ${group.total < 0 ? 'text-status-red' : 'text-navy'}`}
-          style={{ fontSize: '16pt' }}
-        >
-          {fmtUsd(group.total)}
-        </span>
-      </header>
+    <section className="print-tier-1" style={{ marginTop: '18pt' }}>
       {group.children.length === 0 ? (
-        <p className="font-body italic text-muted text-[11pt] py-3 px-2">
-          No {group.account_type} accounts in this scenario.
-        </p>
+        <>
+          <Tier1Header group={group} />
+          <p className="font-body italic text-muted text-[11pt]" style={{ paddingTop: '4pt', paddingLeft: '8pt' }}>
+            No {group.account_type} accounts in this scenario.
+          </p>
+        </>
       ) : (
-        group.children.map((node) => (
-          <Tier2Block key={node.id} node={node} />
-        ))
+        <>
+          {/* Tier 1 header + first Tier 2 block kept together. */}
+          <div className="print-tier-1-with-first-tier-2">
+            <Tier1Header group={group} />
+            <Tier2Block node={firstChild} />
+          </div>
+          {/* Remaining Tier 2 blocks break naturally. */}
+          {restChildren.map((node) => (
+            <Tier2Block key={node.id} node={node} />
+          ))}
+        </>
       )}
     </section>
+  )
+}
+
+// Tier 1 header. Cinzel 16pt navy, gold underline. Pulled into its own
+// component so it can be rendered inside or outside the orphan-
+// prevention wrapper depending on whether the category has children.
+function Tier1Header({ group }) {
+  return (
+    <header
+      className="flex items-baseline gap-3"
+      style={{
+        borderBottom: '1pt solid rgba(215, 191, 103, 0.6)', // gold @ 60%
+        paddingTop: '4pt',
+        paddingBottom: '4pt',
+        marginBottom: '8pt',
+      }}
+    >
+      <span
+        className="font-display text-navy flex-1"
+        style={{ fontSize: '16pt', letterSpacing: '0.05em' }}
+      >
+        {group.label}
+      </span>
+      <span
+        className={`font-display tabular-nums ${group.total < 0 ? 'text-status-red' : 'text-navy'}`}
+        style={{ fontSize: '16pt' }}
+      >
+        {fmtUsd(group.total)}
+      </span>
+    </header>
   )
 }
 
@@ -436,13 +478,17 @@ function Tier2Block({ node }) {
   }
 
   return (
-    <section className="print-tier-2 mt-4 mb-2" style={{ paddingLeft: '24px' }}>
+    <section
+      className="print-tier-2"
+      style={{ paddingLeft: '24px', marginTop: '12pt', marginBottom: '4pt' }}
+    >
       <header
-        className="flex items-baseline gap-3 pb-1 mb-1"
+        className="flex items-baseline gap-3"
         style={{
           borderBottom: '0.5pt solid rgba(25, 42, 79, 0.3)', // navy @ 30%
           maxWidth: '95%',
-          paddingTop: '6pt',
+          paddingBottom: '2pt',
+          marginBottom: '4pt',
         }}
       >
         <span
@@ -508,7 +554,7 @@ function Tier3Header({ node, depth }) {
         paddingLeft: `${indentPx}px`,
         maxWidth: '85%',
         paddingTop: '6pt',
-        paddingBottom: '3pt',
+        paddingBottom: '2pt',
       }}
     >
       <span
@@ -544,8 +590,8 @@ function LeafRow({ node, depth }) {
       style={{
         paddingLeft: `${indentPx}px`,
         maxWidth: '75%',
-        paddingTop: '2pt',
-        paddingBottom: '2pt',
+        paddingTop: '1pt',
+        paddingBottom: '1pt',
       }}
     >
       <span
