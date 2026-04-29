@@ -11,8 +11,10 @@ import {
 } from '../../lib/budgetBootstrap'
 import {
   buildBudgetTree,
+  buildSnapshotTree,
   computeKpis,
   findUnbudgetedAccounts,
+  snapshotKpis,
 } from '../../lib/budgetTree'
 import {
   approveAndLockScenario,
@@ -322,6 +324,16 @@ function BudgetStage() {
   const [accounts, setAccounts] = useState([])
   const [lines, setLines] = useState([])
 
+  // Locked-scenario render path (architecture Section 5.1 binding rule):
+  // when the active scenario is locked, the budget tree and KPIs come
+  // from the snapshot tables — NOT from budget_stage_lines joined to
+  // live chart_of_accounts. The snapshot's captured-by-value columns
+  // are the source of truth for locked views; live data is forbidden
+  // in that render path. These two pieces of state hold the snapshot
+  // payload; they're empty in drafting / pending_lock_review states.
+  const [snapshot, setSnapshot] = useState(null)
+  const [snapshotLines, setSnapshotLines] = useState([])
+
   const [dataLoading, setDataLoading] = useState(false)
 
   const [creating, setCreating] = useState(false)
@@ -425,35 +437,74 @@ function BudgetStage() {
     setActiveScenarioId(active)
 
     if (active) {
-      const { data: lineRows, error: linesErr } = await supabase
-        .from('budget_stage_lines')
-        .select('id, scenario_id, account_id, amount, source_type, notes')
-        .eq('scenario_id', active)
-      if (linesErr) {
-        toast.error(linesErr.message)
+      const activeRow = list.find((s) => s.id === active)
+      try {
+        await fetchScenarioPayload(active, activeRow?.state)
+      } catch (e) {
+        toast.error(e.message || String(e))
         setDataLoading(false)
         return
       }
-      setLines(lineRows || [])
     } else {
       setLines([])
+      setSnapshot(null)
+      setSnapshotLines([])
     }
 
     setDataLoading(false)
   }, [activeScenarioId, stageId, toast])
 
-  const loadLines = useCallback(async (scenarioId) => {
-    setDataLoading(true)
+  // Branched data load. For LOCKED scenarios the budget tree comes
+  // from budget_snapshots + budget_snapshot_lines (architecture Section
+  // 5.1: locked-state UI renders exclusively from snapshot tables).
+  // For drafting / pending_lock_review / pending_unlock_review, lines
+  // come from budget_stage_lines and the tree builder joins them to
+  // the live chart_of_accounts payload already loaded.
+  //
+  // Sets either {snapshot, snapshotLines} or {lines}; the unused side
+  // is cleared so the useMemo branches read clean state.
+  const fetchScenarioPayload = useCallback(async (scenarioId, scenarioState) => {
+    if (scenarioState === 'locked') {
+      const { data: snap, error: snapErr } = await supabase
+        .from('budget_snapshots')
+        .select('*')
+        .eq('scenario_id', scenarioId)
+        .order('locked_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (snapErr) throw snapErr
+      if (!snap) {
+        // Architectural anomaly: scenario.state = 'locked' but no
+        // snapshot row exists. Migration 012's lock function inserts
+        // both atomically so this should be impossible. Surface
+        // clearly rather than silently falling back to live data,
+        // which would re-introduce the bug this guards against.
+        setSnapshot(null)
+        setSnapshotLines([])
+        setLines([])
+        throw new Error(
+          'Locked scenario is missing its snapshot row. Database may have been edited outside the lock workflow; contact a system admin.'
+        )
+      }
+      const { data: snapLines, error: snapLinesErr } = await supabase
+        .from('budget_snapshot_lines')
+        .select('id, account_id, account_code, account_name, account_type, account_hierarchy_path, is_pass_thru, is_ed_program_dollars, is_contribution, amount, source_type, notes')
+        .eq('snapshot_id', snap.id)
+      if (snapLinesErr) throw snapLinesErr
+      setSnapshot(snap)
+      setSnapshotLines(snapLines || [])
+      setLines([])
+      return
+    }
+    // Live mode (drafting / pending_lock_review / pending_unlock_review)
     const { data, error } = await supabase
       .from('budget_stage_lines')
       .select('id, scenario_id, account_id, amount, source_type, notes')
       .eq('scenario_id', scenarioId)
-    if (error) {
-      toast.error(error.message)
-    } else {
-      setLines(data || [])
-    }
-    setDataLoading(false)
+    if (error) throw error
+    setLines(data || [])
+    setSnapshot(null)
+    setSnapshotLines([])
   }, [])
 
   // Reload when AYE OR stage changes — switching between Preliminary
@@ -478,24 +529,48 @@ function BudgetStage() {
     }
     if (!activeScenarioId) {
       setLines([])
+      setSnapshot(null)
+      setSnapshotLines([])
       setUndoStack([])
       return
     }
     setUndoStack([])
-    loadLines(activeScenarioId)
-  }, [activeScenarioId, loadLines])
+    const activeRow = scenarios.find((s) => s.id === activeScenarioId)
+    if (!activeRow) return
+    setDataLoading(true)
+    ;(async () => {
+      try {
+        await fetchScenarioPayload(activeScenarioId, activeRow.state)
+      } catch (e) {
+        toast.error(e.message || String(e))
+      } finally {
+        setDataLoading(false)
+      }
+    })()
+  }, [activeScenarioId, scenarios, fetchScenarioPayload, toast])
 
   // ---- derived values --------------------------------------------------
 
-  const tree = useMemo(
-    () => buildBudgetTree(accounts, lines),
-    [accounts, lines]
-  )
+  // Tree source forks on scenario state. Locked → buildSnapshotTree
+  // from captured columns. Drafting / pending → buildBudgetTree from
+  // live COA + active lines. The two builders return the same shape
+  // so BudgetDetailZone renders either without modification.
+  const tree = useMemo(() => {
+    if (activeScenario?.state === 'locked') {
+      return buildSnapshotTree(snapshotLines)
+    }
+    return buildBudgetTree(accounts, lines)
+  }, [activeScenario, snapshotLines, accounts, lines])
 
   const kpis = useMemo(() => {
     if (!activeScenario) return null
+    if (activeScenario.state === 'locked') {
+      // Locked: KPIs come from captured snapshot columns, not from
+      // re-computing across live data.
+      return snapshotKpis(snapshot)
+    }
     return computeKpis(accounts, lines)
-  }, [accounts, lines, activeScenario])
+  }, [accounts, lines, activeScenario, snapshot])
 
   const unbudgeted = useMemo(() => {
     if (!activeScenario || autoDetectDismissed) return []
@@ -665,7 +740,11 @@ function BudgetStage() {
       .from('budget_stage_lines')
       .insert(newLines)
     if (error) throw error
-    await loadLines(activeScenario.id)
+    // Auto-detect banner only renders in drafting state, so the
+    // active scenario is guaranteed to be drafting here. Reload the
+    // live lines via the state-aware payload fetcher to keep the
+    // tree in sync.
+    await fetchScenarioPayload(activeScenario.id, activeScenario.state)
   }
 
   // ---- inline add account ----------------------------------------------

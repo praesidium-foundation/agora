@@ -317,3 +317,151 @@ export function findUnbudgetedAccounts(accounts, lines) {
     (a) => a.posts_directly && !a.is_pass_thru && a.is_active && !inBudget.has(a.id)
   )
 }
+
+
+// Build a budget tree from snapshot lines (architecture Section 5.1
+// binding rule: locked-state UI renders exclusively from snapshot
+// tables). The snapshot's captured columns ARE the source of truth —
+// we do not look up live chart_of_accounts data for any field that's
+// captured (account_code, account_name, account_hierarchy_path,
+// is_pass_thru, is_ed_program_dollars, is_contribution).
+//
+// Tree structure is reconstructed from account_hierarchy_path. Each
+// path is a colon-delimited "Top : Mid : Leaf" string captured by
+// Migration 012's coa_hierarchy_path() at lock time. We split on
+// ' : ', create intermediate nodes for non-leaf segments, and attach
+// the snapshot line as the leaf's `line`. Top-level segments are
+// bucketed into income vs. expense by the line's captured account_type.
+//
+// Inputs:
+//   snapshotLines — array of budget_snapshot_lines rows
+//
+// Output: same shape as buildBudgetTree, so BudgetDetailZone renders
+// it without modification.
+//
+// What's intentionally NOT applied here:
+//   - is_active filter (snapshot lines render regardless of the live
+//     account's current status — that's the whole point of immutable
+//     captured-by-value snapshots)
+//   - posts_directly filter (the snapshot captures what was budgeted;
+//     summary or pass-thru accounts shouldn't be in there per
+//     Migration 011's trigger, but if they are, render them as
+//     captured rather than silently dropping)
+//   - Subtree pruning (every snapshot line gets rendered, period)
+export function buildSnapshotTree(snapshotLines) {
+  const incomeRoots = []
+  const expenseRoots = []
+  // Path-prefix → existing node, so siblings under the same parent
+  // share the parent node rather than creating duplicates.
+  const pathMap = new Map()
+
+  function makeNode(name, accountType) {
+    return {
+      id: null,
+      code: null,
+      name,
+      account_type: accountType,
+      // Intermediate path nodes are synthetic summaries; only the
+      // leaf carries the line and is "posting." Set posts_directly
+      // = true on leaves below.
+      posts_directly: false,
+      is_pass_thru: false,
+      is_ed_program_dollars: false,
+      is_contribution: false,
+      // Snapshot rows are immune to live account state — render as
+      // active so BudgetDetailZone doesn't apply opacity-50 styling
+      // for live-deactivated accounts. The snapshot has its own
+      // visual treatment via the LockedBanner above.
+      is_active: true,
+      parent_id: null,
+      sort_order: 0,
+      line: null,
+      rollup: 0,
+      children: [],
+    }
+  }
+
+  for (const sl of snapshotLines) {
+    const path = sl.account_hierarchy_path || sl.account_name
+    const segments = path.split(' : ')
+    let parentChildren = sl.account_type === 'income' ? incomeRoots : expenseRoots
+
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i]
+      const isLeaf = i === segments.length - 1
+      const pathKey = segments.slice(0, i + 1).join(' : ')
+
+      let node = pathMap.get(pathKey)
+      if (!node) {
+        node = makeNode(segment, sl.account_type)
+        node.id = `snap:${pathKey}`
+        pathMap.set(pathKey, node)
+        parentChildren.push(node)
+      }
+
+      if (isLeaf) {
+        // Leaf — attach captured line + flags. Code is null for
+        // accounts without one in the COA.
+        node.code = sl.account_code
+        node.posts_directly = true
+        node.is_pass_thru = sl.is_pass_thru
+        node.is_ed_program_dollars = sl.is_ed_program_dollars
+        node.is_contribution = sl.is_contribution
+        node.line = {
+          id: sl.id,
+          amount: Number(sl.amount) || 0,
+          source_type: sl.source_type,
+          notes: sl.notes,
+        }
+      }
+
+      parentChildren = node.children
+    }
+  }
+
+  // Sort siblings: by code (numeric) when both have one, else by name.
+  function sortTree(nodes) {
+    nodes.sort((a, b) => {
+      if (a.code && b.code && a.code !== b.code) {
+        return a.code.localeCompare(b.code, undefined, { numeric: true })
+      }
+      return a.name.localeCompare(b.name)
+    })
+    nodes.forEach((n) => sortTree(n.children))
+  }
+  sortTree(incomeRoots)
+  sortTree(expenseRoots)
+
+  // Compute rollups (own amount + all descendants).
+  function rollup(node) {
+    let total = node.line ? node.line.amount : 0
+    for (const c of node.children) total += rollup(c)
+    node.rollup = total
+    return total
+  }
+
+  const incomeTotal  = incomeRoots.reduce((s, n) => s + rollup(n), 0)
+  const expenseTotal = expenseRoots.reduce((s, n) => s + rollup(n), 0)
+
+  return {
+    income:  { label: 'INCOME',  account_type: 'income',  total: incomeTotal,  children: incomeRoots },
+    expense: { label: 'EXPENSES', account_type: 'expense', total: expenseTotal, children: expenseRoots },
+  }
+}
+
+// Adapter: snapshot row -> KpiSidebar shape. Locked scenarios use
+// captured KPI columns from budget_snapshots (Migration 012 captured
+// them at lock time via compute_budget_scenario_kpis). Drafting/pending
+// scenarios continue to use computeKpis() above.
+export function snapshotKpis(snapshot) {
+  if (!snapshot) return null
+  return {
+    totalIncome:         Number(snapshot.kpi_total_income) || 0,
+    totalExpense:        Number(snapshot.kpi_total_expenses) || 0,
+    netIncome:           Number(snapshot.kpi_net_income) || 0,
+    edProgramDollars:    Number(snapshot.kpi_ed_program_dollars) || 0,
+    edProgramRatio:      snapshot.kpi_ed_program_ratio   !== null ? Number(snapshot.kpi_ed_program_ratio)   : null,
+    contributionsTotal:  Number(snapshot.kpi_contributions_total) || 0,
+    pctPersonnel:        snapshot.kpi_pct_personnel      !== null ? Number(snapshot.kpi_pct_personnel)      : null,
+  }
+}
