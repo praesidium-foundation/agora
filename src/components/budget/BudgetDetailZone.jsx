@@ -20,6 +20,11 @@ import { editableOrder } from '../../lib/budgetTree'
 //   onSaveAmount(accountId, newAmount, prevAmount) — called on each save
 //   onUndo()                                       — called on Cmd+Z
 //   undoAvailable boolean
+//   onShowLineHistory(line, account) — optional; when provided, a small
+//     "history" icon appears next to each leaf row's amount cell so users
+//     can audit edits to that specific line without leaving the page.
+//     The handler receives { id, amount, source_type } from the line and
+//     { id, code, name } from the account.
 
 const usd0 = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -119,7 +124,7 @@ function AmountEditor({ initial, onSave, onCancel, onTab }) {
 
 // One row in the tree. Posting accounts get the editable treatment;
 // summary accounts render as category headers with rollup totals.
-function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editableSeq }) {
+function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editableSeq, onShowLineHistory }) {
   const isPosting = node.posts_directly
   const hasLine = node.line !== null
   const amount = hasLine ? node.line.amount : 0
@@ -197,6 +202,26 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
           </span>
         )}
 
+        {/* History affordance. Posting accounts with a real backing
+            line get a small clock icon to the right of the amount; the
+            click hands the line off to the parent which opens the
+            LineHistoryModal. Hidden when there's no handler (e.g.,
+            print routes don't pass one) or no line yet. */}
+        {isPosting && hasLine && onShowLineHistory && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onShowLineHistory(node.line, { id: node.id, code: node.code, name: node.name })
+            }}
+            aria-label={`View history for ${node.name}`}
+            title="View history"
+            className="text-muted hover:text-navy text-[12px] leading-none px-1.5 py-1 rounded hover:bg-cream-highlight transition-colors"
+          >
+            🕓
+          </button>
+        )}
+
         {/* Amount cell. Posting accounts: clickable to edit (or editor
             when active). Summary accounts: rollup total, read-only.
             Editable cells render with an input-style outline so it's
@@ -259,6 +284,7 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
           readOnly={readOnly}
           onSaveAmount={onSaveAmount}
           editableSeq={editableSeq}
+          onShowLineHistory={onShowLineHistory}
         />
       ))}
     </>
@@ -276,7 +302,7 @@ function linkedSourceLabel(sourceType) {
 
 // Synthetic top-level group (INCOME / EXPENSES). The label is rendered
 // in a heading-like band; the rolled-up total sits at the right.
-function TopGroup({ group, editing, setEditing, readOnly, onSaveAmount, editableSeq }) {
+function TopGroup({ group, editing, setEditing, readOnly, onSaveAmount, editableSeq, onShowLineHistory }) {
   return (
     <div className="mb-6">
       <div className="flex items-center gap-3 px-2 py-2 border-b-[0.5px] border-navy/30">
@@ -309,6 +335,7 @@ function TopGroup({ group, editing, setEditing, readOnly, onSaveAmount, editable
             readOnly={readOnly}
             onSaveAmount={onSaveAmount}
             editableSeq={editableSeq}
+            onShowLineHistory={onShowLineHistory}
           />
         ))
       )}
@@ -322,6 +349,7 @@ function BudgetDetailZone({
   onSaveAmount,
   onUndo,
   undoAvailable,
+  onShowLineHistory,
 }) {
   const [editing, setEditing] = useState({ accountId: null })
 
@@ -361,6 +389,7 @@ function BudgetDetailZone({
         readOnly={readOnly}
         onSaveAmount={onSaveAmount}
         editableSeq={editableSeq}
+        onShowLineHistory={onShowLineHistory}
       />
       <TopGroup
         group={tree.expense}
@@ -369,6 +398,7 @@ function BudgetDetailZone({
         readOnly={readOnly}
         onSaveAmount={onSaveAmount}
         editableSeq={editableSeq}
+        onShowLineHistory={onShowLineHistory}
       />
 
       {readOnly && (

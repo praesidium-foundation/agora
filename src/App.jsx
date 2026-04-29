@@ -10,6 +10,9 @@ import Financial from './pages/admin/settings/Financial'
 import ModuleConfiguration from './pages/admin/settings/ModuleConfiguration'
 import TuitionWorksheet from './pages/modules/TuitionWorksheet'
 import BudgetStage from './pages/modules/BudgetStage'
+import BudgetDetailPrint from './pages/print/BudgetDetailPrint'
+import BudgetActivityPrint from './pages/print/BudgetActivityPrint'
+import BudgetLineHistoryPrint from './pages/print/BudgetLineHistoryPrint'
 import ProtectedRoute from './lib/ProtectedRoute'
 
 function App() {
@@ -87,6 +90,36 @@ function App() {
           element={
             <ProtectedRoute>
               <BudgetStage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Print routes (Phase 2 Commit F). Each renders a dedicated
+            component tree with its own letterhead, page chrome, and
+            auto-firing window.print(). NOT the editing UI with print
+            styles bolted on. Permission gating is handled inside each
+            page component (budget.view). */}
+        <Route
+          path="/print/budget/:scenarioId"
+          element={
+            <ProtectedRoute>
+              <BudgetDetailPrint />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/print/budget/:scenarioId/activity"
+          element={
+            <ProtectedRoute>
+              <BudgetActivityPrint />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/print/budget-line/:lineId/history"
+          element={
+            <ProtectedRoute>
+              <BudgetLineHistoryPrint />
             </ProtectedRoute>
           }
         />

@@ -38,6 +38,8 @@ import ScenarioSettingsModal from '../../components/budget/ScenarioSettingsModal
 import SubmitLockModal from '../../components/budget/SubmitLockModal'
 import ApproveLockBar from '../../components/budget/ApproveLockBar'
 import LockedBanner from '../../components/budget/LockedBanner'
+import LineHistoryModal from '../../components/budget/LineHistoryModal'
+import ActivityFeedPanel from '../../components/budget/ActivityFeedPanel'
 
 // Stage-aware Budget page. The Budget module supports configurable
 // workflows (Migration 010 / 011) — Libertas's workflow has two stages
@@ -213,7 +215,9 @@ function HeaderZone({
               title={
                 !scenarioForActions
                   ? 'No scenario to print.'
-                  : 'Open the browser print dialog. Save as PDF, or print directly. Polished print layout (DRAFT watermark, approved-by footer, narrative block) ships in the next commit (F).'
+                  : scenarioForActions.state === 'locked'
+                    ? 'Open the locked Operating Budget Detail PDF (snapshot data, approved-by footer).'
+                    : 'Open the DRAFT Operating Budget Detail PDF (live data, watermarked).'
               }
               onClick={onViewPdfClick}
             />
@@ -361,6 +365,10 @@ function BudgetStage() {
   const [autoDetectDismissed, setAutoDetectDismissed] = useState(false)
   const [undoStack, setUndoStack] = useState([])
 
+  // Per-line audit history modal. Holds {lineId, accountCode,
+  // accountName} when open; null when closed.
+  const [lineHistoryFor, setLineHistoryFor] = useState(null)
+
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) || null,
     [scenarios, activeScenarioId]
@@ -376,6 +384,15 @@ function BudgetStage() {
     () => findLockedSibling(scenarios, activeScenarioId),
     [scenarios, activeScenarioId]
   )
+
+  // Account lookup map for the activity feed and line-history modal.
+  // Resolves account_id → {code, name} so audit events render as
+  // "Curriculum/Book Fees ($0 → $9,750)" instead of raw uuids.
+  const accountsById = useMemo(() => {
+    const m = {}
+    for (const a of accounts) m[a.id] = { code: a.code, name: a.name }
+    return m
+  }, [accounts])
 
   // Load stage metadata when stageId in the URL changes. The stage row
   // is small (label + short label + type) and tells the page what
@@ -985,16 +1002,6 @@ function BudgetStage() {
 
   return (
     <AppShell>
-      {/* DRAFT print marker — display:none on screen, visible only at the
-          top of the print dialog when state != 'locked'. Section 2.5
-          says non-final outputs must be DRAFT-marked; this is the
-          minimum stub. Commit F replaces it with a diagonal watermark
-          + header banner + footer note. */}
-      {activeScenario && activeScenario.state !== 'locked' && (
-        <div className="draft-print-marker hidden">
-          DRAFT — {activeScenario.state.toUpperCase().replace(/_/g, ' ')}
-        </div>
-      )}
       <div className="-mx-6 -my-6 flex flex-col h-[calc(100vh-3.5rem)]">
         <div className="px-6">
           <HeaderZone
@@ -1010,7 +1017,11 @@ function BudgetStage() {
             onResetClick={handleResetScenarioLines}
             onAddAccountClick={() => setAddAccountOpen(true)}
             onSaveClick={() => toast.success('All changes are saved.')}
-            onViewPdfClick={() => window.print()}
+            onViewPdfClick={() => {
+              if (activeScenario) {
+                window.open(`/print/budget/${activeScenario.id}`, '_blank', 'noopener')
+              }
+            }}
             onSubmitLockClick={() => setSubmitLockOpen(true)}
             resetting={resetting}
             canEdit={canEdit && canEditCoa}
@@ -1113,6 +1124,11 @@ function BudgetStage() {
                   />
                 )}
 
+                <ActivityFeedPanel
+                  scenarioId={activeScenario.id}
+                  accountsById={accountsById}
+                />
+
                 <BudgetDetailZone
                   tree={tree}
                   readOnly={readOnly}
@@ -1121,6 +1137,13 @@ function BudgetStage() {
                   }
                   onUndo={handleUndo}
                   undoAvailable={undoStack.length > 0}
+                  onShowLineHistory={(line, account) =>
+                    setLineHistoryFor({
+                      lineId: line.id,
+                      accountCode: account.code,
+                      accountName: account.name,
+                    })
+                  }
                 />
               </>
             )}
@@ -1179,6 +1202,15 @@ function BudgetStage() {
           lockedSibling={lockedSibling}
           onCancel={() => setSubmitLockOpen(false)}
           onConfirm={handleSubmitLockConfirm}
+        />
+      )}
+
+      {lineHistoryFor && (
+        <LineHistoryModal
+          lineId={lineHistoryFor.lineId}
+          accountCode={lineHistoryFor.accountCode}
+          accountName={lineHistoryFor.accountName}
+          onClose={() => setLineHistoryFor(null)}
         />
       )}
     </AppShell>

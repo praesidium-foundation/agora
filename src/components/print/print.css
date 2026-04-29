@@ -1,0 +1,156 @@
+/* ============================================================================
+   Print styles — Phase 2 Commit F
+   ----------------------------------------------------------------------------
+   Scope: applies to elements inside `.print-page` (the wrapper rendered by
+   PrintShell). The dedicated print routes /print/budget/... are SEPARATE
+   page trees from the editing UI — no AppShell, no global header, no nav
+   sidebar — so most of the prior Commit E's media-print rules to "hide
+   chrome" are no longer needed. What remains here is the actual print
+   layout: page geometry, watermark, running headers, and tweaks for the
+   document body.
+   Architecture references:
+     §2.5  DRAFT marking on non-final outputs
+     §2.6  Approved-by indicator on locked outputs
+     §5.3  HTML-to-PDF render path (window.print() + this stylesheet)
+     §10.4 PDF-Specific Standards (margins, fonts, contrast)
+   ============================================================================ */
+
+/* ----- @page geometry -----------------------------------------------------
+   US Letter, portrait. 0.75-inch margins (Section 10.4 minimum) — the page
+   reserves a top strip for the running DRAFT banner and a bottom strip
+   for page numbers. Browsers vary in their support for @page margin boxes
+   (Chrome and Safari respect them via window.print(); Firefox is more
+   conservative). Our running header/footer rely on position:fixed which
+   all three repeat per-page reliably. */
+@page {
+  size: letter portrait;
+  margin: 0.85in 0.75in 1in 0.75in;
+}
+
+/* ----- on-screen vs print element gating --------------------------------
+   .no-print: visible on screen, hidden in print (toolbar, etc.)
+   .print-only: hidden on screen, visible in print (page-number widget) */
+.print-page .no-print { display: revert; }
+.print-page .print-only { display: none; }
+
+@media print {
+  /* Hide on-screen-only elements. */
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+
+  /* Force the print page to white. The screen render uses bg-white via
+     Tailwind already, but defense in depth. */
+  html, body, .print-page {
+    background: white !important;
+    color: #192A4F !important;
+  }
+
+  /* Drop the screen-side max-width centering — the @page margins handle
+     the width, and the document should fill the printable area. */
+  .print-document {
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Logo: ensure raster scales crisply for print. The PNG ships at
+     enough resolution that 1in ≈ 192px renders cleanly. SVG would be
+     better and is the upgrade path. */
+  .print-logo {
+    image-rendering: -webkit-optimize-contrast;
+  }
+
+  /* Diagonal "DRAFT" watermark, positioned to sit behind every page.
+     Browsers render position:fixed once per printed page when @page is
+     active, so we get a watermark on each page without having to
+     duplicate per page break. */
+  .print-watermark {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: rotate(-30deg);
+    transform-origin: center;
+    font-family: 'Cinzel', Georgia, serif;
+    font-size: 130pt;
+    font-weight: 600;
+    letter-spacing: 0.3em;
+    color: rgba(163, 45, 45, 0.10); /* status-red @ 10% */
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Running header band — small DRAFT label across the top of every
+     page. Same fixed-position-per-page trick as the watermark. */
+  .print-running-header {
+    position: fixed;
+    top: 0.25in;
+    left: 0.75in;
+    right: 0.75in;
+    text-align: center;
+    font-family: 'Cinzel', Georgia, serif;
+    font-size: 9pt;
+    letter-spacing: 0.2em;
+    color: #A32D2D;
+    border-top: 0.5pt solid #A32D2D;
+    border-bottom: 0.5pt solid #A32D2D;
+    padding: 2pt 0;
+    z-index: 1;
+  }
+
+  /* Body text: 11pt minimum (Section 10.1). Tailwind's text-[14px]
+     etc. land in the 9-11pt range when printed; bump up the body
+     baseline so it always reads as a real document. */
+  .print-document .print-body,
+  .print-document .print-body p,
+  .print-document .print-body li,
+  .print-document .print-body td,
+  .print-document .print-body th {
+    font-size: 11pt;
+  }
+
+  /* Hierarchy preservation: keep category headers with their first
+     row of children. (Section 10.4: page-break-inside: avoid on
+     category groups; page-break-before: avoid on leaf accounts.) */
+  .print-category {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print-leaf {
+    break-before: avoid;
+    page-break-before: avoid;
+  }
+
+  /* Page-number footer via @page margin boxes. Chrome + Safari support
+     this; Firefox falls back to no page numbers (acceptable degrade). */
+  @page {
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: 'EB Garamond', Georgia, serif;
+      font-size: 9pt;
+      color: #475472;
+    }
+  }
+}
+
+/* ----- on-screen preview (not print) ------------------------------------
+   The PrintShell page renders on screen too — we want it to look like a
+   document preview rather than a blank page. These rules style the
+   on-screen view; print rules above override where they conflict. */
+.print-page {
+  background: white;
+}
+
+.print-watermark {
+  display: none;
+}
+.print-running-header {
+  display: none;
+}
+
+/* On screen, give the running-page-number footer a non-print preview. */
+.print-page .print-footer p:last-child {
+  text-align: center;
+}
