@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { findLockedSibling } from '../../lib/budgetLock'
 
 // Scenario tab bar rendered in the page header zone. One tab per
 // budget_stage_scenarios row for the active (AYE, Stage), plus a final
@@ -12,8 +13,14 @@ import { useEffect, useState } from 'react'
 //     scenario unmarks the previously-marked one; handled by parent)
 //   - Delete (confirmation; disabled when state != 'drafting')
 //
+// Lock-state gating: when ANY scenario in the (AYE, stage) is in
+// 'locked' state, no other scenario in that slot may be marked
+// recommended (Migration 015 enforces this with a BEFORE UPDATE
+// trigger; this UI mirrors the rule with a disabled menu item +
+// tooltip so the user understands the block before clicking).
+//
 // Props:
-//   scenarios       — full list of scenarios for the active AYE
+//   scenarios       — full list of scenarios for the active AYE/stage
 //   activeId        — currently selected scenario id
 //   onSelect(id)    — switch active
 //   onAdd()         — open the New Scenario modal
@@ -33,6 +40,7 @@ function ScenarioTabs({ scenarios, activeId, onSelect, onAdd, onAction, canEdit 
         <ScenarioTab
           key={s.id}
           scenario={s}
+          lockedSibling={findLockedSibling(scenarios, s.id)}
           active={s.id === activeId}
           onSelect={() => onSelect(s.id)}
           onAction={(action) => onAction(s.id, action)}
@@ -52,7 +60,7 @@ function ScenarioTabs({ scenarios, activeId, onSelect, onAdd, onAction, canEdit 
   )
 }
 
-function ScenarioTab({ scenario, active, onSelect, onAction, canEdit }) {
+function ScenarioTab({ scenario, lockedSibling, active, onSelect, onAction, canEdit }) {
   const [menuOpen, setMenuOpen] = useState(false)
 
   // Outside-click close. Window-level listener is cheap given there's
@@ -138,14 +146,31 @@ function ScenarioTab({ scenario, active, onSelect, onAction, canEdit }) {
         >
           {/* Recommended toggle pinned to the top with a star icon —
               recommendation is the most consequential action and
-              the gate for the lock workflow (Section 8.9). */}
+              the gate for the lock workflow (Section 8.9).
+
+              Sibling-lock guard: when another scenario in this
+              (AYE, stage) is locked, "Mark as recommended" is
+              disabled with a tooltip. Migration 015's trigger
+              would reject the UPDATE anyway; the UI mirrors the
+              schema rule so users understand the block before
+              clicking. */}
           {!scenario.is_recommended ? (
-            <MenuItem
-              onClick={() => { setMenuOpen(false); onAction('recommend') }}
-              icon={<span className="text-gold text-[12px]">★</span>}
-            >
-              Mark as recommended
-            </MenuItem>
+            lockedSibling ? (
+              <MenuItem
+                disabled
+                icon={<span className="text-gold text-[12px]">★</span>}
+                title={`"${lockedSibling.scenario_label}" is currently locked in this (AYE, stage). Unlock it first.`}
+              >
+                Mark as recommended
+              </MenuItem>
+            ) : (
+              <MenuItem
+                onClick={() => { setMenuOpen(false); onAction('recommend') }}
+                icon={<span className="text-gold text-[12px]">★</span>}
+              >
+                Mark as recommended
+              </MenuItem>
+            )
           ) : (
             <MenuItem
               disabled

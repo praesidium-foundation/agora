@@ -18,6 +18,7 @@ import {
 } from '../../lib/budgetTree'
 import {
   approveAndLockScenario,
+  findLockedSibling,
   rejectScenarioLock,
   submitScenarioForLockReview,
 } from '../../lib/budgetLock'
@@ -103,6 +104,7 @@ function HeaderZone({
   canEdit,
   canSubmitLock,
   scenarioForActions,
+  lockedSibling,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -139,14 +141,17 @@ function HeaderZone({
     !scenarioForActions ||
     !canSubmitLock ||
     !scenarioForActions.is_recommended ||
-    scenarioForActions.state !== 'drafting'
+    scenarioForActions.state !== 'drafting' ||
+    !!lockedSibling
 
   // Inline-hint condition: every gate other than is_recommended is
   // satisfied. We don't want to nag the user with this hint when the
-  // problem is something else (wrong state, wrong permission).
+  // problem is something else (wrong state, wrong permission, or a
+  // sibling-lock block — the page-level banner covers that case).
   const showRecommendedHint =
     !!scenarioForActions &&
     !!canSubmitLock &&
+    !lockedSibling &&
     scenarioForActions.state === 'drafting' &&
     !scenarioForActions.is_recommended
 
@@ -156,9 +161,11 @@ function HeaderZone({
       ? 'Submit for lock review requires submit_lock permission.'
       : scenarioForActions.state !== 'drafting'
         ? `Scenario is ${scenarioForActions.state}; submit not available in this state.`
-        : !scenarioForActions.is_recommended
-          ? 'This scenario must be marked as recommended before it can be locked. Use the scenario tab menu (⋮) to mark it.'
-          : 'Submit for lock review.'
+        : lockedSibling
+          ? `Scenario "${lockedSibling.scenario_label}" is currently locked in this (AYE, stage). Unlock it before submitting this scenario for lock review.`
+          : !scenarioForActions.is_recommended
+            ? 'This scenario must be marked as recommended before it can be locked. Use the scenario tab menu (⋮) to mark it.'
+            : 'Submit for lock review.'
 
   // Stage display: prefer the configured display_name; short_name in
   // the breadcrumb keeps the trail compact.
@@ -356,6 +363,17 @@ function BudgetStage() {
 
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) || null,
+    [scenarios, activeScenarioId]
+  )
+
+  // When ANY scenario in this (AYE, stage) is locked, every OTHER
+  // scenario in the slot is gated from claiming `recommended` or
+  // submitting for lock review (Migration 015 / architecture Section
+  // 8.7). This in-memory derivation feeds the page banner, the
+  // ScenarioTabs menu gating, the Submit button tooltip, and the
+  // SubmitLockModal hardBlock failure.
+  const lockedSibling = useMemo(
+    () => findLockedSibling(scenarios, activeScenarioId),
     [scenarios, activeScenarioId]
   )
 
@@ -998,6 +1016,7 @@ function BudgetStage() {
             canEdit={canEdit && canEditCoa}
             canSubmitLock={canSubmitLock || canPbAdmin}
             scenarioForActions={activeScenario}
+            lockedSibling={lockedSibling}
           />
         </div>
 
@@ -1063,6 +1082,24 @@ function BudgetStage() {
                     <p className="text-body">
                       Submitted; waiting for an approver. The detail view is
                       read-only until approval or rejection.
+                    </p>
+                  </div>
+                )}
+                {activeScenario.state === 'drafting' && lockedSibling && (
+                  <div className="mb-4 px-4 py-3 bg-status-amber-bg border-[0.5px] border-status-amber/30 rounded text-status-amber text-sm">
+                    <p className="font-display text-[13px] tracking-[0.06em] uppercase mb-0.5">
+                      Sibling scenario is locked
+                    </p>
+                    <p className="text-body">
+                      Scenario{' '}
+                      <strong className="font-medium">
+                        {lockedSibling.scenario_label}
+                      </strong>{' '}
+                      is currently locked for this {aye?.label || 'AYE'}{' '}
+                      {stage.display_name}. You can still draft and edit
+                      this scenario, but it can't be marked recommended or
+                      submitted for lock review until the locked sibling
+                      is unlocked.
                     </p>
                   </div>
                 )}
@@ -1139,6 +1176,7 @@ function BudgetStage() {
           lines={lines}
           ayeId={selectedAyeId}
           isAdmin={!!canPbAdmin}
+          lockedSibling={lockedSibling}
           onCancel={() => setSubmitLockOpen(false)}
           onConfirm={handleSubmitLockConfirm}
         />

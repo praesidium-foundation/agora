@@ -27,13 +27,49 @@
 
 import { supabase } from './supabase'
 
-// Pure validation over scenario + lines.
-export function validateScenarioForLock(scenario, lines) {
+// Find a sibling scenario (same AYE + stage) that's currently locked.
+// Returns the sibling row or null. Pure / sync; takes the in-memory
+// scenarios array from the page so it doesn't need a DB roundtrip.
+//
+// Used by:
+//   - ScenarioTabs to gate the "Mark as recommended" menu item
+//   - SubmitLockModal to add a hardBlock failure on submit
+//   - BudgetStage to render the informational banner
+//
+// Schema-level safety net: Migration 015's triggers reject the same
+// transitions even if a malicious caller bypasses these UI checks.
+export function findLockedSibling(scenarios, currentScenarioId) {
+  if (!Array.isArray(scenarios)) return null
+  return scenarios.find(
+    (s) => s.id !== currentScenarioId && s.state === 'locked'
+  ) || null
+}
+
+// Pure validation over scenario + lines + (optional) locked sibling.
+//
+// Failures may carry a `hardBlock: true` flag indicating the failure
+// can NOT be overridden at the application layer (it'd be rejected by
+// the DB trigger anyway). The override checkbox in SubmitLockModal is
+// hidden when any hardBlock failure is present.
+export function validateScenarioForLock(scenario, lines, lockedSibling = null) {
   const failures = []
 
   if (!scenario) {
     failures.push({ kind: 'missing_scenario', message: 'No active scenario.' })
     return failures
+  }
+
+  // Sibling-lock guard. Hard block — the DB trigger from Migration 015
+  // rejects the transition even with admin "override" set, so we don't
+  // expose an override path the database would refuse.
+  if (lockedSibling) {
+    failures.push({
+      kind: 'sibling_locked',
+      hardBlock: true,
+      message:
+        `Scenario "${lockedSibling.scenario_label}" in this (AYE, stage) is currently locked. ` +
+        `Unlock it before submitting "${scenario.scenario_label}" for review.`,
+    })
   }
 
   if (scenario.state !== 'drafting') {

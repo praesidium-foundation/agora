@@ -26,7 +26,7 @@ import { checkCascadeRules, validateScenarioForLock } from '../../lib/budgetLock
 //   onConfirm     — async ({lockedVia, overrideJustification}) => void;
 //                    parent calls submitScenarioForLockReview
 
-function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm }) {
+function SubmitLockModal({ scenario, lines, ayeId, isAdmin, lockedSibling, onCancel, onConfirm }) {
   const [validating, setValidating] = useState(true)
   const [inMemoryFailures, setInMemoryFailures] = useState([])
   const [cascadeFailures, setCascadeFailures] = useState([])
@@ -43,7 +43,7 @@ function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm 
       setValidating(true)
       setValidationError(null)
       try {
-        const inMem = validateScenarioForLock(scenario, lines)
+        const inMem = validateScenarioForLock(scenario, lines, lockedSibling)
         if (!mounted) return
         setInMemoryFailures(inMem)
 
@@ -58,7 +58,7 @@ function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm 
     }
     run()
     return () => { mounted = false }
-  }, [scenario, lines, ayeId])
+  }, [scenario, lines, ayeId, lockedSibling])
 
   // Escape-to-close.
   useEffect(() => {
@@ -71,6 +71,10 @@ function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm 
 
   const totalFailures = inMemoryFailures.length + cascadeFailures.length
   const hardFailuresExist = totalFailures > 0
+  // Hard-block failures (sibling locked, etc.) cannot be overridden —
+  // the DB trigger would reject the transition even with admin set.
+  // Hide the override path entirely when any hardBlock is present.
+  const hasHardBlock = inMemoryFailures.some((f) => f.hardBlock)
   const onlyWarnings =
     inMemoryFailures.length === 0 &&
     cascadeFailures.length > 0 &&
@@ -79,12 +83,16 @@ function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm 
   // Submit affordance gating:
   // - clean pass (no failures): "Submit for Lock Review" enabled
   // - failures present + admin + override-mode + justification text:
-  //     "Override and submit" enabled
+  //     "Override and submit" enabled (UNLESS a hardBlock failure
+  //     is present — see hasHardBlock above)
   // - failures present + admin + NOT override-mode: show override
   //     toggle; submit disabled
+  // - hard-block failure: no override option, submit permanently
+  //     disabled until the upstream condition is resolved
   // - failures present + non-admin: submit disabled, no override option
   const canCleanSubmit = !hardFailuresExist
   const canOverrideSubmit =
+    !hasHardBlock &&
     isAdmin && hardFailuresExist && overrideMode && justification.trim().length > 0
 
   async function handleConfirm() {
@@ -151,6 +159,7 @@ function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm 
               inMemoryFailures={inMemoryFailures}
               cascadeFailures={cascadeFailures}
               isAdmin={isAdmin}
+              hasHardBlock={hasHardBlock}
               overrideMode={overrideMode}
               setOverrideMode={setOverrideMode}
               justification={justification}
@@ -178,6 +187,11 @@ function SubmitLockModal({ scenario, lines, ayeId, isAdmin, onCancel, onConfirm 
             type="button"
             onClick={handleConfirm}
             disabled={submitting || (!canCleanSubmit && !canOverrideSubmit)}
+            title={
+              hasHardBlock
+                ? 'A sibling scenario in this (AYE, stage) is locked. Unlock it before submitting this scenario for lock review.'
+                : undefined
+            }
             className="bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting
@@ -224,7 +238,7 @@ function CleanPassBody({ scenario, lines, onlyWarnings, cascadeFailures }) {
 }
 
 function FailuresBody({
-  inMemoryFailures, cascadeFailures, isAdmin,
+  inMemoryFailures, cascadeFailures, isAdmin, hasHardBlock,
   overrideMode, setOverrideMode, justification, setJustification,
 }) {
   return (
@@ -264,7 +278,13 @@ function FailuresBody({
         </div>
       )}
 
-      {!isAdmin ? (
+      {hasHardBlock ? (
+        <p className="text-muted italic text-sm">
+          These checks cannot be overridden — they're enforced at the
+          database layer. Resolve the upstream condition (e.g. unlock
+          the sibling scenario) before submitting for lock review.
+        </p>
+      ) : !isAdmin ? (
         <p className="text-muted italic text-sm">
           You can't override these checks. Resolve them and try again, or
           ask a system admin to submit with override.
