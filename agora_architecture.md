@@ -1548,6 +1548,18 @@ Same first-page-prominent / subsequent-page-restrained pattern across all three 
 
 Each school configures its own brand specifics in **Settings → Brand** during onboarding.
 
+#### Brand surface separation
+
+Agora / Praesidium identity surfaces in exactly one place: the **login page** (`/login`). The Praesidium-attribution logo (`/public/Agora logo wt png.png`) renders at the bottom of the sign-in screen against the navy background, with a small legal line beneath ("Agora is a product of Praesidium Foundation, Inc."). The login page is the moment of arriving at the platform itself, before entering the school's customized environment — the right and only place to surface the parent-organization identity.
+
+Every authenticated experience past `/login` is school-branded:
+
+- AppShell header, nav sidebar, KPI sidebar, page chrome — school's brand
+- PDFs (Operating Budget Detail, audit history exports) — school's full horizontal logo, not Agora/Praesidium
+- Favicon, browser tab title, locked-banner attribution — school's
+
+This separation reflects the product's positioning: Praesidium is the platform; the school is the experience. A board chair reading a locked Budget PDF in a binder sees their own school's identity, not the platform vendor's. A parent loading the site at the login URL sees both — the platform behind the experience.
+
 ### 10.8 Software-neutral language
 
 User-facing copy in Agora does not name third-party products by brand. Concepts that originated with specific software (e.g., "subaccount of" from QuickBooks vocabulary) are adopted as accounting-domain vocabulary, not promoted as product references. The principle is product neutrality: Agora is sold to schools using various accounting software (QuickBooks Online, Xero, Sage, Wave, Aplos, etc.), and naming any one in narrative copy implicitly endorses it and alienates the others.
