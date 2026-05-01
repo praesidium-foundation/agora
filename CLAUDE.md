@@ -64,6 +64,23 @@ All colors are exposed as Tailwind tokens (see `tailwind.config.js`).
   - **Cross-module references** (e.g., "the locked budget for this AYE"): match by `stage_type_at_lock` from snapshots, not by display name. Example — "the most recent locked snapshot for AYE X whose `stage_type_at_lock` is terminal" is the canonical "official budget."
   - **Internal code** may freely use stage-type identifiers (`'preliminary'`, `'final'`) as constants — those are stable identifiers, not user-facing strings. Display labels come from the school's workflow row.
 
+**Locked-state rendering and snapshots.** When a module supports locking (Budget today; Tuition, Staffing, Strategic Plan, Final Budget, etc. as they ship), render paths must split on state:
+
+  - **Drafting / pending states** read from live tables joined to live `chart_of_accounts` (or whatever the live schema is for that module).
+  - **Locked state** reads exclusively from snapshot tables (`*_snapshots` + `*_snapshot_lines`) using their captured-by-value columns. Live joins to `chart_of_accounts` (or any other source table that can change post-lock) are **forbidden** in locked render paths.
+
+The reason is governance integrity: a locked snapshot is the document a board chair puts in a binder. It must be invariant under post-lock edits to live data — deactivating an account, renaming an account, or reparenting an account in the live COA must leave every locked PDF and every locked in-app view exactly as it was at lock time. The schema enforces this with `ON DELETE SET NULL` on snapshot FKs to source tables; the render code enforces it by not joining live. The Budget module follows this pattern in `fetchScenarioPayload` (locked path) and `buildSnapshotTree` (reconstruction from captured `account_hierarchy_path` segments). See architecture doc Section 5.1 binding rule and v2.7 history note.
+
+**PDF/print rendering.** Agora's PDFs are produced via dedicated print routes plus `window.print()`, not a server-side renderer (no Puppeteer, no react-pdf, no headless Chromium). Each print surface lives at a `/print/...` route that mounts its own component tree (no AppShell, no nav sidebar, no KPI sidebar), renders with the shared `PrintShell` component (letterhead, watermark, footer), and auto-fires `window.print()` on mount. All print styling lives in `src/components/print/print.css`. Existing routes: `/print/budget/:scenarioId` (Operating Budget Detail), `/print/budget/:scenarioId/activity` (per-scenario activity feed), `/print/budget-line/:lineId/history` (per-line audit history). New PDF surfaces follow the same pattern. This avoids server-side rendering infrastructure for ad-hoc PDF generation; the upgrade path (if emailable PDFs become a real requirement) is to mount the same React tree in a Vercel serverless function with a headless-Chromium renderer — Layers 1 and 2 of the §5.3 architecture (snapshot retrieval + view selection) stay unchanged. See architecture doc Section 5.3 and v2.9 history note.
+
+**Three-layer enforcement for state invariants.** When the schema requires that some action be impossible under certain conditions (e.g., "marking Scenario 2 as recommended is forbidden while Scenario 1 is locked"), enforce in three layers:
+
+  - **Database** — `BEFORE UPDATE` (or equivalent) trigger that rejects the disallowed transition. This is the hard guard; nothing in the application layer can bypass it. Triggers should fire only on the specific transition so no-op UPDATEs pass through.
+  - **Application validator** — a pure/sync helper (e.g., `findLockedSibling`, `validateScenarioForLock` in `src/lib/budgetLock.js`) that detects the condition and produces a structured failure (typically tagged `hardBlock: true, kind: '...'`). Lets the UI explain the block before the user attempts it; lets submission paths hide override affordances when the DB will refuse anyway.
+  - **UI affordance** — disable the offending control with a tooltip naming the specific blocker; render an informational banner where appropriate. Prevents the user from ever hitting the trigger in normal use.
+
+All three layers must agree. The DB trigger is the source of truth; the application and UI layers exist to make the user experience graceful, not to substitute for the trigger. Migration 015 (sibling lock guards) is the canonical example. See architecture doc Section 8.7.1.
+
 ## Architecture reference
 
 The file `agora_architecture.md` at the project root is the **canonical architecture reference** for Agora by Praesidium — schema patterns, module relationships, permission model, design standards, AYE lifecycle, and build sequencing. Read it before any non-trivial schema or feature work. Where conflicts arise between this doc, build prompts, or earlier conversation snippets, the architecture doc wins. Appendix B lists implemented and planned migrations; keep it current.
@@ -85,17 +102,18 @@ When implementing visual changes, match the mockup precisely — don't approxima
 
 ## Brand asset rules
 
-The school crest is core to Libertas Academy's identity and appears throughout the app. Two versions exist:
+The school crest is core to Libertas Academy's identity and appears throughout the app. Three logo assets exist:
 
-- `/logo-mark-white.png` — use on dark backgrounds (navy, black, dark gray, etc.)
-- `/logo-mark.png` — use on light backgrounds (white, cream, light gray, etc.)
+- `/logo-mark-white.png` — crest version, use on dark backgrounds (navy, black, dark gray, etc.)
+- `/logo-mark.png` — crest version, use on light backgrounds (white, cream, light gray, etc.); also the in-app and favicon source asset
+- `/logo-horizontal-color.png` — full horizontal wordmark in color, used on the first page of every printable governance document (Budget PDFs and future report PDFs). Subsequent pages of the same PDF use a thin Cinzel text running header instead of the logo (see architecture doc §10.4 "Logo treatment in printed governance documents")
 
-Always pick the version that contrasts with the surrounding background. Never apply CSS filters, color overlays, or opacity changes to the crest itself — use the correct file instead.
+Always pick the version that contrasts with the surrounding background. Never apply CSS filters, color overlays, or opacity changes to the logo itself — use the correct file instead.
 
 Standard placements:
-- Login page: white version, centered above "LIBERTAS ACADEMY" wordmark
-- Dashboard / app navigation bar (top-left): white version (nav bar is dark)
-- Printable reports and PDFs: navy version (light backgrounds)
+- Login page: white crest version (`logo-mark-white.png`), centered above "LIBERTAS ACADEMY" wordmark
+- Dashboard / app navigation bar (top-left): white crest (`logo-mark-white.png`) — nav bar is dark
+- Printable reports and PDFs: full horizontal color wordmark (`logo-horizontal-color.png`) on the first page; text running header on subsequent pages
 - Browser favicon: handled separately via `/favicon.png`
 
-When building any new page or component that includes the crest, follow these rules without needing to ask.
+When building any new page or component that includes a logo, follow these rules without needing to ask.
