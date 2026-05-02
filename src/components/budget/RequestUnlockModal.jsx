@@ -125,14 +125,23 @@ export default function RequestUnlockModal({
         </div>
 
         <div className="px-6 py-5 overflow-y-auto">
+          {/* Copy reflects the v3.7 two-identity model: submission
+              counts as approval 1; one additional approver completes
+              the unlock. The "Treasurer (or designee)" phrasing names
+              the Budget module's canonical fiscal governance
+              authority — module-scoped per architecture §3.5 (Module-
+              scoped governance authority in lock/unlock workflows).
+              The system enforces only the permission grant
+              (approve_unlock) and the distinct-identity constraint;
+              the procedural mapping of which user holds the
+              Treasurer role is school-level configuration. */}
           <p className="text-body text-sm leading-relaxed mb-4">
-            Submitting this unlock request records your approval as the
-            first of two. The scenario remains locked until a second
-            approver — different from you, also holding{' '}
-            <code className="font-body text-[12px]">approve_unlock</code>{' '}
-            — confirms. The locked snapshot remains in audit history;
-            this only reopens the live working copy of{' '}
+            Submitting records your approval as the first of two.
+            Treasurer (or designee) must confirm to complete the
+            unlock of{' '}
             <strong className="font-medium">{scenario.scenario_label}</strong>.
+            The locked snapshot remains in audit history; this only
+            reopens the live working copy.
           </p>
 
           <FieldLabel htmlFor="unlock-justification">

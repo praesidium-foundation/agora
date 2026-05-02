@@ -10,7 +10,7 @@
 -- Architecture references:
 --   §3.4  Stage initialization cascade (paragraph added in v3.5)
 --   §8.14 Final Budget setup model (new in v3.5)
---   §3.7  Module workflows and stages (sort_order semantics)
+--   §3.8  Module workflows and stages (sort_order semantics)
 --
 -- Validation rules enforced in the function:
 --   1. Caller has 'edit' permission or higher on the Budget module.
