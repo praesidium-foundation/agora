@@ -114,24 +114,21 @@ select id, scenario_label, state, is_recommended,
 -- BEGIN/ROLLBACK so the live locked scenario stays untouched whether
 -- the test succeeds or fails.
 --
--- Important about the SQL Editor context: `auth.uid()` is NULL in the
--- editor (the editor runs as `postgres`, with no JWT). The functions
--- check `current_user_has_module_perm(...)` which falls back to
--- `is_system_admin()` — true for the postgres role — so all three
--- branches WILL execute. Initiator-separation logic that checks
--- `unlock_requested_by = auth.uid()` will treat both sides as NULL
--- (NULL = NULL is NULL, which is falsy in `if`), meaning the
--- initiator-as-approver path won't be exercised here. That's
--- acceptable — H2 will exercise that path with a real authenticated
--- user. What we DO confirm here:
---   1. request_budget_stage_unlock sets unlock_requested = true and
---      stores the justification.
---   2. The state stays 'locked' during the request (locked render
---      paths remain bound to snapshots — §5.1).
---   3. Empty / whitespace-only justification is rejected.
---   4. reject_budget_stage_unlock clears all unlock fields and
---      leaves state = 'locked'.
---   5. Empty / whitespace-only reason on reject is rejected.
+-- The SQL Editor context: `auth.uid()` is NULL in the editor by
+-- default (no JWT). The functions check `current_user_has_module_perm`
+-- which depends on `auth.uid()`, so without impersonation the
+-- permission gate fails and Test 1 errors out before the test logic
+-- runs. To exercise the functions for real, we impersonate Jenna by
+-- setting `request.jwt.claims` with her UID. set_config(..., true)
+-- means "local to this transaction" — the impersonation evaporates
+-- with the rollback at the end.
+--
+-- Tests exercised here:
+--   1. request_budget_stage_unlock sets fields correctly; state stays locked
+--   2. Empty / whitespace-only justification is rejected
+--   3. reject (withdraw path, since requester == caller) clears fields
+--   4. Initiator cannot approve their own unlock request
+--   5. Empty / whitespace-only reason on reject is rejected
 --
 -- A successful run produces no output other than "Success. Rolled back."
 
@@ -139,9 +136,22 @@ begin;
 
 do $$
 declare
+  v_jenna_id    uuid;
   v_scenario_id uuid;
   v_post        record;
 begin
+  -- Look up Jenna's auth UID and impersonate for this transaction.
+  select id into v_jenna_id from auth.users where email = 'jennsalazar@hotmail.com';
+  if v_jenna_id is null then
+    raise exception 'SMOKE TEST PRECONDITION FAILED: jennsalazar@hotmail.com not in auth.users';
+  end if;
+
+  perform set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_jenna_id::text)::text,
+    true
+  );
+
   -- Pick the most recently-locked scenario.
   select id into v_scenario_id
     from budget_stage_scenarios
@@ -156,7 +166,7 @@ begin
   -- ---- Test 1: request_budget_stage_unlock should succeed -----------------
   perform request_budget_stage_unlock(v_scenario_id, 'smoke test — H1 validation');
 
-  select state, unlock_requested, unlock_request_justification
+  select state, unlock_requested, unlock_request_justification, unlock_requested_by
     into v_post
     from budget_stage_scenarios
    where id = v_scenario_id;
@@ -171,10 +181,12 @@ begin
      or length(trim(v_post.unlock_request_justification)) = 0 then
     raise exception 'TEST 1 FAILED: justification did not persist correctly';
   end if;
+  if v_post.unlock_requested_by <> v_jenna_id then
+    raise exception 'TEST 1 FAILED: unlock_requested_by = %, expected Jenna (%)',
+      v_post.unlock_requested_by, v_jenna_id;
+  end if;
 
-  -- ---- Test 2: empty justification on a fresh request should be rejected ---
-  -- We must reject the existing request first to clear unlock_requested,
-  -- then attempt a fresh request with empty justification.
+  -- ---- Test 2: empty justification on a fresh request should be rejected --
   perform reject_budget_stage_unlock(v_scenario_id, 'reset for test 2');
 
   begin
@@ -185,11 +197,9 @@ begin
       if SQLERRM not like '%non-empty justification%' then
         raise exception 'TEST 2 FAILED: wrong error message — got: %', SQLERRM;
       end if;
-      -- Otherwise: passes; expected exception with expected message.
   end;
 
-  -- ---- Test 3: reject_budget_stage_unlock clears fields, state stays locked
-  -- Set up: request again, then reject and verify.
+  -- ---- Test 3: reject (withdraw path) clears fields, state stays locked ---
   perform request_budget_stage_unlock(v_scenario_id, 'setup for test 3');
   perform reject_budget_stage_unlock(v_scenario_id, 'smoke test cleanup');
 
@@ -211,19 +221,28 @@ begin
     raise exception 'TEST 3 FAILED: state changed to % after reject (expected: still locked)', v_post.state;
   end if;
 
-  -- ---- Test 4: empty reason on reject should be rejected ------------------
-  -- Re-request to set up; then attempt reject with empty reason.
+  -- ---- Test 4: initiator-as-approver is forbidden -------------------------
   perform request_budget_stage_unlock(v_scenario_id, 'setup for test 4');
 
   begin
+    perform approve_budget_stage_unlock(v_scenario_id);
+    raise exception 'TEST 4 FAILED: initiator was allowed to approve their own unlock';
+  exception
+    when others then
+      if SQLERRM not like '%initiator cannot also approve%' then
+        raise exception 'TEST 4 FAILED: wrong error message — got: %', SQLERRM;
+      end if;
+  end;
+
+  -- ---- Test 5: empty reason on reject should be rejected ------------------
+  begin
     perform reject_budget_stage_unlock(v_scenario_id, '');
-    raise exception 'TEST 4 FAILED: empty reason was accepted on reject';
+    raise exception 'TEST 5 FAILED: empty reason was accepted on reject';
   exception
     when others then
       if SQLERRM not like '%reason%' then
-        raise exception 'TEST 4 FAILED: wrong error message — got: %', SQLERRM;
+        raise exception 'TEST 5 FAILED: wrong error message — got: %', SQLERRM;
       end if;
-      -- Otherwise: passes; expected exception with expected message.
   end;
 
   -- All tests passed silently if we reach here.
