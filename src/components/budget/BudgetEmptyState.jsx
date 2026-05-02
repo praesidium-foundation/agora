@@ -90,21 +90,14 @@ function BudgetEmptyState({
         </p>
 
         {/* Step 1: AYE selection. Prominent so first-time users see
-            exactly which year they're targeting before they pick a
-            bootstrap path. */}
+            exactly which year they are targeting before they pick a
+            bootstrap path. The AYE label below the selector was
+            removed — the selector itself is sufficient identification. */}
         <section className="mb-6 pb-5 border-b-[0.5px] border-card-border">
           <p className="font-display text-[12px] text-navy/70 tracking-[0.10em] uppercase mb-2">
             Step 1 — Confirm the academic year
           </p>
-          <div className="flex items-end gap-4 flex-wrap">
-            <AYESelector value={ayeId} onChange={onAyeChange} />
-            {ayeLabel && (
-              <p className="font-body italic text-muted text-xs pb-2">
-                You're working on <strong className="not-italic font-medium text-body">{ayeLabel}</strong>.
-                Switch above if this isn't the right year.
-              </p>
-            )}
-          </div>
+          <AYESelector value={ayeId} onChange={onAyeChange} />
         </section>
 
         {/* Step 2: bootstrap path. */}

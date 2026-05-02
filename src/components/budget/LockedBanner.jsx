@@ -8,6 +8,7 @@ import {
   getUnlockBannerState,
   UNLOCK_REASON_COPY,
 } from '../../lib/budgetUnlock'
+import { getDisplayNameForContext } from '../../lib/scenarioName'
 
 // Banner shown above the budget detail when the active scenario is
 // locked. Surfaces the lock metadata (when, by whom, override or
@@ -43,6 +44,8 @@ import {
 //
 // Props:
 //   scenario         — active scenario row (state = 'locked')
+//   aye              — { id, label } the active AYE — for canonical name
+//   stage            — { id, display_name, ... } the active stage — for canonical name
 //   lockedByName     — display name for scenario.locked_by (resolved
 //                      by parent — pre-existing pattern)
 //   currentUser      — { id }
@@ -57,9 +60,19 @@ import {
 // done internally — those uids are only needed in the morphing
 // states, and keeping the lookup co-located with the rendering code
 // keeps BudgetStage less crowded.
+//
+// Canonical naming (architecture §8.15): when state = locked the
+// banner heading shows the canonical artifact name (e.g.
+// "Libertas Academy AYE 2026 Preliminary Budget") rather than the
+// working scenario label. The artifact identity does not change
+// while unlock is pending — only after unlock completes does state
+// flip to drafting and the working name take over (and at that point
+// the banner does not render at all).
 
 function LockedBanner({
   scenario,
+  aye,
+  stage,
   lockedByName,
   currentUser,
   hasSubmitLock,
@@ -103,6 +116,8 @@ function LockedBanner({
     return (
       <BaseLockedBody
         scenario={scenario}
+        aye={aye}
+        stage={stage}
         lockedByName={lockedByName}
         currentUser={currentUser}
         hasSubmitLock={hasSubmitLock}
@@ -114,6 +129,8 @@ function LockedBanner({
     <UnlockInProgressBody
       bannerState={bannerState}
       scenario={scenario}
+      aye={aye}
+      stage={stage}
       requesterName={requesterName}
       firstApproverName={firstApproverName}
       currentUser={currentUser}
@@ -129,6 +146,8 @@ function LockedBanner({
 // treatment (green) when locked_via='normal'; amber when 'override'.
 function BaseLockedBody({
   scenario,
+  aye,
+  stage,
   lockedByName,
   currentUser,
   hasSubmitLock,
@@ -141,6 +160,9 @@ function BaseLockedBody({
     : '—'
   const isOverride = scenario.locked_via === 'override'
   const requestGate = canRequestUnlock(scenario, currentUser, hasSubmitLock)
+  // Canonical name for the heading line — official identity of the
+  // locked artifact, not the working scenario label (architecture §8.15).
+  const canonicalName = getDisplayNameForContext('locked_banner', { scenario, aye, stage })
 
   return (
     <div
@@ -167,7 +189,7 @@ function BaseLockedBody({
             Locked {isOverride && '— with override'}
           </p>
           <p className="text-sm text-body leading-relaxed">
-            <strong className="font-medium">{scenario.scenario_label}</strong>{' '}
+            <strong className="font-medium">{canonicalName}</strong>{' '}
             was locked on <strong className="font-medium">{dateStr}</strong>
             {lockedByName ? <> by <strong className="font-medium">{lockedByName}</strong></> : null}.
             To edit, request unlock from the Treasurer.
@@ -198,10 +220,15 @@ function BaseLockedBody({
 }
 
 // States 2 + 3: amber treatment, request details visible inline,
-// action buttons gated by helper outcomes.
+// action buttons gated by helper outcomes. The artifact identity does
+// not change while unlock is pending — the canonical name still applies
+// (architecture §8.15: state stays 'locked' throughout the unlock-
+// in-progress window).
 function UnlockInProgressBody({
   bannerState,
   scenario,
+  aye,
+  stage,
   requesterName,
   firstApproverName,
   currentUser,
@@ -210,6 +237,7 @@ function UnlockInProgressBody({
   onRejectUnlock,
   onWithdrawUnlock,
 }) {
+  const canonicalName = getDisplayNameForContext('locked_banner', { scenario, aye, stage })
   const requestedAtStr = scenario.unlock_requested_at
     ? new Date(scenario.unlock_requested_at).toLocaleDateString(undefined, {
         year: 'numeric', month: 'long', day: 'numeric',
@@ -259,7 +287,8 @@ function UnlockInProgressBody({
             Unlock requested · {isFinalApproval ? 'awaiting final approval' : 'awaiting first approval'}
           </p>
           <p className="text-sm text-body leading-relaxed">
-            Requested by{' '}
+            <strong className="font-medium">{canonicalName}</strong>:
+            requested by{' '}
             <strong className="font-medium">{requesterName || 'unknown user'}</strong>{' '}
             on <strong className="font-medium">{requestedAtStr}</strong>.
             {isFinalApproval && firstApproverName ? (

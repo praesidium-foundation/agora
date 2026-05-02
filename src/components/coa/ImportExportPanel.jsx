@@ -216,7 +216,7 @@ function FlagReviewGrid({ accounts, onSave, onCancel, saving, error }) {
         <p className="text-body">
           Review the imported accounts. Set each as a <strong className="font-medium">Posting</strong> account
           (where transactions actually post in your books) or <strong className="font-medium">Summary</strong> account
-          (pure rollup of subaccounts that doesn't receive direct posts). For
+          (pure rollup of subaccounts that does not receive direct posts). For
           posting income accounts, mark which count toward Ed Program Dollars or
           Contributions for KPI reporting. Pass-thru accounts (money collected
           on behalf of others — e.g., field-trip fees that pass to a vendor)
@@ -897,7 +897,7 @@ function ImportExportPanel({ accounts, onClose, onImported }) {
               {importSummary.insertedCount === 1 ? '' : 's'}.</strong>
               {importSummary.format === 'quickbooks' && (
                 <span className="text-muted italic">
-                  {' '}Account list exports from accounting software don't
+                  {' '}Account list exports from accounting software do not
                   carry posting/summary or governance flags — review them next.
                 </span>
               )}

@@ -44,6 +44,8 @@ import RequestUnlockModal from '../../components/budget/RequestUnlockModal'
 import ApproveUnlockModal from '../../components/budget/ApproveUnlockModal'
 import RejectUnlockModal from '../../components/budget/RejectUnlockModal'
 import WithdrawUnlockModal from '../../components/budget/WithdrawUnlockModal'
+import PredecessorSelector from '../../components/budget/PredecessorSelector'
+import SeedFromPredecessorModal from '../../components/budget/SeedFromPredecessorModal'
 
 // Stage-aware Budget page. The Budget module supports configurable
 // workflows (Migration 010 / 011) — Libertas's workflow has two stages
@@ -383,6 +385,11 @@ function BudgetStage() {
   // the activeScenario, so a single piece of state suffices.
   const [unlockModal, setUnlockModal] = useState(null)
 
+  // Predecessor-seed modal state for the non-first-stage setup flow.
+  // Holds { snapshot, predecessorStage } when open; null otherwise.
+  // Architecture §8.14.
+  const [seedFromSnapshot, setSeedFromSnapshot] = useState(null)
+
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) || null,
     [scenarios, activeScenarioId]
@@ -421,7 +428,7 @@ function BudgetStage() {
     ;(async () => {
       const { data, error } = await supabase
         .from('module_workflow_stages')
-        .select('id, stage_type, display_name, short_name, sort_order, target_month')
+        .select('id, stage_type, display_name, short_name, sort_order, target_month, workflow_id')
         .eq('id', stageId)
         .maybeSingle()
       if (!mounted) return
@@ -439,6 +446,48 @@ function BudgetStage() {
     })()
     return () => { mounted = false }
   }, [stageId])
+
+  // Sibling stages in the same workflow. Loaded after the active stage
+  // is loaded; used to detect whether the current stage is the first
+  // in its workflow (architecture §8.14: first stages keep the
+  // three-option setup flow; non-first stages seed from a locked
+  // predecessor) and to enumerate predecessors for the
+  // PredecessorSelector view. Order ascending by sort_order so the
+  // resulting array reads workflow-natural.
+  const [workflowStages, setWorkflowStages] = useState([])
+  useEffect(() => {
+    if (!stage?.workflow_id) {
+      setWorkflowStages([])
+      return
+    }
+    let mounted = true
+    ;(async () => {
+      const { data } = await supabase
+        .from('module_workflow_stages')
+        .select('id, display_name, short_name, sort_order')
+        .eq('workflow_id', stage.workflow_id)
+        .order('sort_order', { ascending: true })
+      if (!mounted) return
+      setWorkflowStages(data || [])
+    })()
+    return () => { mounted = false }
+  }, [stage?.workflow_id])
+
+  // Derived: is this the first stage in its workflow? (Lowest
+  // sort_order.) Determines which setup view renders when no scenario
+  // exists yet for the (AYE, stage) combination.
+  const isFirstStageInWorkflow = useMemo(() => {
+    if (!stage || workflowStages.length === 0) return null // unknown
+    const minSort = Math.min(...workflowStages.map((s) => s.sort_order))
+    return stage.sort_order === minSort
+  }, [stage, workflowStages])
+
+  // Predecessor stages — those with lower sort_order than the current
+  // stage in the same workflow. Empty for first stages.
+  const predecessorStages = useMemo(() => {
+    if (!stage) return []
+    return workflowStages.filter((s) => s.sort_order < stage.sort_order)
+  }, [stage, workflowStages])
 
   // ---- data load -------------------------------------------------------
 
@@ -972,7 +1021,7 @@ function BudgetStage() {
       <AppShell>
         <Breadcrumb items={[{ label: 'Budget' }, { label: stage?.short_name || 'Stage' }]} />
         <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
-          You don't have access to this module.
+          You do not have access to this module.
         </h1>
         <p className="text-body mb-6">
           Budget access requires the appropriate module permission.
@@ -1075,18 +1124,40 @@ function BudgetStage() {
               <p className="text-muted mt-8">Loading…</p>
             ) : !activeScenario ? (
               canEdit ? (
-                <BudgetEmptyState
-                  ayeId={selectedAyeId}
-                  ayeLabel={aye?.label}
-                  stageDisplayName={stage.display_name}
-                  stageId={stage.id}
-                  onAyeChange={setSelectedAyeId}
-                  onStartBlank={handleStartBlank}
-                  onUploadCsv={() => setCsvOpen(true)}
-                  onBootstrapPrior={handleBootstrapPrior}
-                  creating={creating}
-                  error={bootstrapError}
-                />
+                /* Setup gateway. Branches on whether this stage is
+                   the first in its workflow (architecture §8.14):
+                     - First stage    → BudgetEmptyState (three options)
+                     - Non-first stage → PredecessorSelector (cards or
+                                          empty state if no locked
+                                          predecessor exists yet)
+                   isFirstStageInWorkflow is null while the workflow's
+                   stage list is still loading; we render the existing
+                   empty state in that brief window rather than
+                   flashing two views in sequence. */
+                isFirstStageInWorkflow === false ? (
+                  <PredecessorSelector
+                    targetStage={stage}
+                    ayeId={selectedAyeId}
+                    ayeLabel={aye?.label}
+                    predecessorStages={predecessorStages}
+                    onSelectSnapshot={(snapshot, predecessorStage) =>
+                      setSeedFromSnapshot({ snapshot, predecessorStage })
+                    }
+                  />
+                ) : (
+                  <BudgetEmptyState
+                    ayeId={selectedAyeId}
+                    ayeLabel={aye?.label}
+                    stageDisplayName={stage.display_name}
+                    stageId={stage.id}
+                    onAyeChange={setSelectedAyeId}
+                    onStartBlank={handleStartBlank}
+                    onUploadCsv={() => setCsvOpen(true)}
+                    onBootstrapPrior={handleBootstrapPrior}
+                    creating={creating}
+                    error={bootstrapError}
+                  />
+                )
               ) : (
                 <p className="text-muted italic mt-8">
                   No {stage.display_name} exists for {aye?.label || 'this AYE'} yet. You
@@ -1098,6 +1169,8 @@ function BudgetStage() {
                 {activeScenario.state === 'locked' && (
                   <LockedBanner
                     scenario={activeScenario}
+                    aye={aye}
+                    stage={stage}
                     lockedByName={lockedByName}
                     currentUser={user}
                     hasSubmitLock={canSubmitLock || canPbAdmin}
@@ -1138,7 +1211,7 @@ function BudgetStage() {
                       </strong>{' '}
                       is currently locked for this {aye?.label || 'AYE'}{' '}
                       {stage.display_name}. You can still draft and edit
-                      this scenario, but it can't be marked recommended or
+                      this scenario, but it cannot be marked recommended or
                       submitted for lock review until the locked sibling
                       is unlocked.
                     </p>
@@ -1280,6 +1353,24 @@ function BudgetStage() {
           currentUser={user}
           onCancel={() => setUnlockModal(null)}
           onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+
+      {/* Predecessor-seed confirmation modal — opens when the user
+          picks a card on PredecessorSelector. Calls
+          create_scenario_from_snapshot RPC; on success we close the
+          modal, refetch, and the new scenario becomes active because
+          loadAyeContext sets activeScenarioId to the returned id. */}
+      {seedFromSnapshot && (
+        <SeedFromPredecessorModal
+          targetStage={stage}
+          sourceSnapshot={seedFromSnapshot.snapshot}
+          sourceAye={aye}
+          onCancel={() => setSeedFromSnapshot(null)}
+          onSuccess={async (newScenarioId) => {
+            setSeedFromSnapshot(null)
+            await loadAyeContext(selectedAyeId, newScenarioId)
+          }}
         />
       )}
     </AppShell>

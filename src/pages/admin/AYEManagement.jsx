@@ -98,7 +98,7 @@ function AYEManagement() {
       <AppShell>
         <Breadcrumb items={[{ label: 'Admin' }, { label: 'Academic Years' }]} />
         <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
-          You don't have access to this page.
+          You do not have access to this page.
         </h1>
         <p className="text-body mb-6">
           Academic Year management is restricted to system admins.

@@ -266,7 +266,7 @@ function TreeNode({ node, depth, expanded, onToggle, onAdd, onEdit, onDeactivate
               // same tooltip; just not red.
               <span
                 title={`Cannot delete: Account has ${node.children.length} subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
-                aria-label="Why can't I delete this?"
+                aria-label="Why can I not delete this?"
                 className="text-muted hover:text-navy text-[12px] cursor-help select-none"
               >
                 (i)
@@ -447,7 +447,7 @@ function FlatTable({ accounts, parentNameById, parentsWithChildren, onAdd, onEdi
                 {canAdmin && parentsWithChildren.has(a.id) && (
                   <span
                     title={`Cannot delete: Account has subaccount(s). Delete or move subaccounts first, or deactivate this account.`}
-                    aria-label="Why can't I delete this?"
+                    aria-label="Why can I not delete this?"
                     className="text-muted hover:text-navy text-[12px] cursor-help select-none"
                   >
                     (i)
@@ -711,7 +711,7 @@ function CoaManagement() {
     return (
       <Card>
         <h2 className="font-display text-navy text-[20px] mb-2 leading-tight">
-          You don't have access to Chart of Accounts.
+          You do not have access to Chart of Accounts.
         </h2>
         <p className="text-body mb-4">
           This module requires at least <strong>view</strong> permission. Contact a system admin if you need access.

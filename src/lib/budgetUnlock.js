@@ -226,14 +226,14 @@ export const UNLOCK_TEXT_MIN_LENGTH = MIN_TEXT_LENGTH
 export const UNLOCK_REASON_COPY = {
   // permission gates
   no_user:                    'You must be signed in.',
-  permission_insufficient:    'You don’t have permission for this action.',
+  permission_insufficient:    'You do not have permission for this action.',
   // state gates
   state_not_locked:           'This scenario is not currently locked.',
   unlock_already_requested:   'An unlock request is already in progress.',
   no_unlock_requested:        'No unlock request is pending on this scenario.',
   // initiator / approver separation
   is_initiator:               'The unlock initiator cannot approve their own request.',
-  is_first_approver:          'You’ve already recorded the first approval; the final approval requires a different approver.',
+  is_first_approver:          'You have already recorded the first approval; the final approval requires a different approver.',
   not_initiator:              'Only the original requester can withdraw this request.',
   // content
   justification_empty:        'Justification is required.',

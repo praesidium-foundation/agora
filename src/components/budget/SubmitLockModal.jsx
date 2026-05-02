@@ -280,13 +280,13 @@ function FailuresBody({
 
       {hasHardBlock ? (
         <p className="text-muted italic text-sm">
-          These checks cannot be overridden — they're enforced at the
+          These checks cannot be overridden — they are enforced at the
           database layer. Resolve the upstream condition (e.g. unlock
           the sibling scenario) before submitting for lock review.
         </p>
       ) : !isAdmin ? (
         <p className="text-muted italic text-sm">
-          You can't override these checks. Resolve them and try again, or
+          You cannot override these checks. Resolve them and try again, or
           ask a system admin to submit with override.
         </p>
       ) : (

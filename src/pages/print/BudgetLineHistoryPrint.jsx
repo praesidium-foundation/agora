@@ -128,7 +128,7 @@ export default function BudgetLineHistoryPrint() {
     return (
       <div className="p-8">
         <p className="font-body text-status-red mb-4">
-          You don't have view access to the Budget module.
+          You do not have view access to the Budget module.
         </p>
         <button
           type="button"

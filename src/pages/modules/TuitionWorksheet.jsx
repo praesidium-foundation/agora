@@ -208,7 +208,7 @@ function TuitionWorksheet() {
       <AppShell>
         <Breadcrumb items={[{ label: 'Budget' }, { label: 'Tuition' }]} />
         <h1 className="font-display text-navy text-[28px] mb-3 leading-tight">
-          You don't have access to this module.
+          You do not have access to this module.
         </h1>
         <p className="text-body mb-6">
           Tuition Worksheet access requires the appropriate module permission.

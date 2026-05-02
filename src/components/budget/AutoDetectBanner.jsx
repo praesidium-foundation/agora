@@ -105,7 +105,7 @@ function AutoDetectBanner({ missing, onAdd, sessionDismiss }) {
             </h3>
             <p className="font-body text-muted text-sm mb-3 leading-relaxed">
               These accounts will be added at $0 to the current scenario.
-              Uncheck any you don't want to include.
+              Uncheck any you do not want to include.
             </p>
 
             <div className="mb-3 flex items-center justify-between">

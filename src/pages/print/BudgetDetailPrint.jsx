@@ -10,6 +10,7 @@ import {
   snapshotKpis,
 } from '../../lib/budgetTree'
 import PrintShell from '../../components/print/PrintShell'
+import { getDisplayNameForContext } from '../../lib/scenarioName'
 
 // Operating Budget Detail print page.
 //
@@ -201,7 +202,7 @@ export default function BudgetDetailPrint() {
     return (
       <div className="p-8">
         <p className="font-body text-status-red mb-4">
-          You don't have view access to the Budget module.
+          You do not have view access to the Budget module.
         </p>
         <button
           type="button"
@@ -233,7 +234,25 @@ export default function BudgetDetailPrint() {
 
   const draft = bundle.mode === 'draft'
   const stateLabel = bundle.scenario.state.toUpperCase().replace(/_/g, ' ')
-  const title = `${bundle.aye.label} ${bundle.stage.display_name}`
+
+  // Letterhead title: canonical artifact name on the LOCKED variant
+  // (architecture §8.15 — locked governance documents are referenced
+  // by canonical computed name); on the DRAFT variant we still show
+  // the AYE+stage as a contextual heading because the working scenario
+  // name is the primary subtitle and a redundant heading would feel
+  // empty.
+  const title = draft
+    ? `${bundle.aye.label} ${bundle.stage.display_name}`
+    : getDisplayNameForContext('pdf_letterhead', {
+        scenario: bundle.scenario,
+        aye: bundle.aye,
+        stage: bundle.stage,
+      })
+
+  // Subtitle: working scenario name. On DRAFT, this is the primary
+  // identifier ("Scenario 1"). On LOCKED, the canonical title is the
+  // primary identifier; the working name still appears underneath for
+  // continuity with how the budget appeared while it was being drafted.
   const subtitle = bundle.scenario.scenario_label
     + (bundle.scenario.description ? ` — ${bundle.scenario.description}` : '')
 

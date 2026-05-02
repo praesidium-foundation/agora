@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { getSchoolName } from '../../lib/schoolConfig'
 import './print.css'
 
 // Shared layout shell for every /print/... route.
@@ -48,7 +49,7 @@ export default function PrintShell({
   draft = false,
   draftLabel,
   approvedNote = null,
-  schoolName = 'Libertas Academy',
+  schoolName = getSchoolName(),
   generatedAt,
   generatedByName,
   children,
