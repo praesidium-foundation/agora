@@ -152,10 +152,9 @@ export async function checkCascadeRules(ayeId) {
 function humanModuleLabel(code) {
   return ({
     enrollment_estimator: 'Enrollment Estimator',
-    tuition_worksheet:    'Tuition Worksheet',
+    tuition:              'Tuition',
     staffing:             'Staffing',
     budget:               'Budget',
-    enrollment_audit:     'Enrollment Audit',
     chart_of_accounts:    'Chart of Accounts',
   })[code] || code
 }

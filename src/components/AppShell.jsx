@@ -80,7 +80,7 @@ const NAV_SECTIONS = [
         label: 'Tuition',
         toggleOnly: true,
         enabled: true,
-        lockKey: 'tuition_worksheet',
+        lockKey: 'tuition',
         subItems: [
           { label: 'Planning', to: '/modules/tuition', enabled: true },
           // { label: 'Audit', to: '/modules/tuition/audit', enabled: true } — Phase 4 follow-on
