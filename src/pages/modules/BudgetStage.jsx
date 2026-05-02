@@ -1194,7 +1194,6 @@ function BudgetStage() {
                     stage={stage}
                     lockedByName={lockedByName}
                     currentUser={user}
-                    hasSubmitLock={canSubmitLock || canPbAdmin}
                     hasApproveUnlock={canApproveUnlock || canPbAdmin}
                     onRequestUnlock={() => setUnlockModal('request')}
                     onApproveUnlock={() => setUnlockModal('approve')}
@@ -1351,7 +1350,7 @@ function BudgetStage() {
         <RequestUnlockModal
           scenario={activeScenario}
           currentUser={user}
-          hasSubmitLock={canSubmitLock || canPbAdmin}
+          hasApproveUnlock={canApproveUnlock || canPbAdmin}
           onCancel={() => setUnlockModal(null)}
           onSuccess={handleUnlockModalSuccess}
         />

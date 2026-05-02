@@ -9,30 +9,39 @@ import FieldLabel from '../FieldLabel'
 
 // Modal that drives the request_budget_stage_unlock RPC.
 //
+// v3.7 (two-identity model): submitting this request atomically
+// records the requester's approval as approval_1. One additional
+// approver (different identity, also holding approve_unlock)
+// completes the unlock by recording approval_2, which transitions
+// state to drafting.
+//
 // Why a modal: per §8.13, the unlock workflow is governance-weight.
 // Inline-banner request would feel too casual for an action that
-// kicks off a multi-approver process. Modal forces a deliberate
-// confirmation pause and gives the user a focused space to write the
-// justification.
+// records the requester's approval and kicks off a final-approval
+// round. Modal forces a deliberate confirmation pause and gives the
+// user a focused space to write the justification.
 //
 // Validation:
 //   - Pre-submit: validateUnlockRequest combines permission +
 //     state gates with non-empty + min-length content check.
-//   - Server-side: H1's request_budget_stage_unlock raises if the
+//   - Server-side: request_budget_stage_unlock raises if the
 //     justification is empty/whitespace OR the scenario isn't locked
-//     OR an unlock is already pending. We mirror the rules in the
-//     validator so users learn before round-tripping.
+//     OR an unlock is already pending. The validator mirrors the
+//     rules so users learn before round-tripping.
 //
 // Props:
 //   scenario          — the active scenario row (must be locked)
 //   currentUser       — { id }
-//   hasSubmitLock     — bool from useModulePermission
+//   hasApproveUnlock  — bool from useModulePermission. v3.7: the
+//                       request gate is approve_unlock (was
+//                       submit_lock in v1) because the request
+//                       counts as approval_1.
 //   onCancel          — () => void
 //   onSuccess         — () => void; parent triggers scenario refetch
 export default function RequestUnlockModal({
   scenario,
   currentUser,
-  hasSubmitLock,
+  hasApproveUnlock,
   onCancel,
   onSuccess,
 }) {
@@ -53,7 +62,7 @@ export default function RequestUnlockModal({
     scenario,
     justification,
     currentUser,
-    hasSubmitLock,
+    hasApproveUnlock,
   )
   const canSubmit = validation.ok
 
@@ -117,11 +126,13 @@ export default function RequestUnlockModal({
 
         <div className="px-6 py-5 overflow-y-auto">
           <p className="text-body text-sm leading-relaxed mb-4">
-            Unlocking returns{' '}
-            <strong className="font-medium">{scenario.scenario_label}</strong>{' '}
-            to drafting after two distinct approvers (other than you) confirm.
-            The locked snapshot remains in audit history; this only reopens
-            the live working copy.
+            Submitting this unlock request records your approval as the
+            first of two. The scenario remains locked until a second
+            approver — different from you, also holding{' '}
+            <code className="font-body text-[12px]">approve_unlock</code>{' '}
+            — confirms. The locked snapshot remains in audit history;
+            this only reopens the live working copy of{' '}
+            <strong className="font-medium">{scenario.scenario_label}</strong>.
           </p>
 
           <FieldLabel htmlFor="unlock-justification">

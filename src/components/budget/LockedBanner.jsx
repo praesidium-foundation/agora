@@ -18,21 +18,24 @@ import { getDisplayNameForContext } from '../../lib/scenarioName'
 // This banner is the on-screen equivalent of the PDF approved-by
 // footer.
 //
-// Architecture §8.13: the banner morphs through three states based on
-// scenario.unlock_requested and scenario.unlock_approval_1_at:
+// Architecture §8.13: the banner morphs through TWO states (v3.7;
+// collapsed from three) based on scenario.unlock_requested:
 //
 //   1. locked_no_request               — green/approved treatment
 //      (or amber when locked_via='override'). Existing production
 //      copy. Shows "Request unlock" button when canRequestUnlock.
 //
-//   2. locked_awaiting_first_approval  — amber treatment. Shows
+//   2. locked_awaiting_final_approval  — amber treatment. Shows
 //      requester / timestamp / justification (no truncation). Action
-//      buttons: Approve unlock, Reject, Withdraw request — each gated
-//      by the corresponding canX helper.
+//      buttons: Approve unlock (gated by canApproveUnlock — requester
+//      cannot approve their own request), Reject (for non-requester
+//      approvers), Withdraw request (for the requester).
 //
-//   3. locked_awaiting_final_approval  — same amber treatment plus
-//      a second line showing the first approver and timestamp. Action
-//      buttons: Approve unlock (final), Reject, Withdraw request.
+// Under v3.7's two-identity model, approval_1 is always already
+// recorded by the requester at submission time — so the intermediate
+// "awaiting first approval" state from v1 is gone. Every pending
+// unlock is awaiting its single remaining approval (approval_2 from
+// a different identity).
 //
 // Slim banner, modal-driven actions: status copy lives in the banner;
 // every action opens a modal for confirmation. Approval is
@@ -49,17 +52,18 @@ import { getDisplayNameForContext } from '../../lib/scenarioName'
 //   lockedByName     — display name for scenario.locked_by (resolved
 //                      by parent — pre-existing pattern)
 //   currentUser      — { id }
-//   hasSubmitLock    — bool from useModulePermission
-//   hasApproveUnlock — bool from useModulePermission
+//   hasApproveUnlock — bool from useModulePermission. v3.7: this is
+//                      the single permission gate for both requesting
+//                      AND approving (request submission counts as
+//                      approval_1; the gate is the same).
 //   onRequestUnlock  — () => void; opens RequestUnlockModal
 //   onApproveUnlock  — () => void; opens ApproveUnlockModal
 //   onRejectUnlock   — () => void; opens RejectUnlockModal
 //   onWithdrawUnlock — () => void; opens WithdrawUnlockModal
 //
-// Name resolution for unlock_requested_by and unlock_approval_1_by is
-// done internally — those uids are only needed in the morphing
-// states, and keeping the lookup co-located with the rendering code
-// keeps BudgetStage less crowded.
+// Name resolution for unlock_requested_by is done internally. Under
+// the two-identity model, requester == approval_1, so a single
+// lookup covers what we need to show on the banner.
 //
 // Canonical naming (architecture §8.15): when state = locked the
 // banner heading shows the canonical artifact name (e.g.
@@ -75,7 +79,6 @@ function LockedBanner({
   stage,
   lockedByName,
   currentUser,
-  hasSubmitLock,
   hasApproveUnlock,
   onRequestUnlock,
   onApproveUnlock,
@@ -84,33 +87,27 @@ function LockedBanner({
 }) {
   const bannerState = getUnlockBannerState(scenario)
 
-  // Names for unlock_requested_by and unlock_approval_1_by. Fetched
-  // lazily — empty until the scenario actually has those uids set.
+  // Requester name. Under the v3.7 two-identity model, requester ==
+  // approval_1 so a single lookup covers everything the banner shows.
   const [requesterName, setRequesterName] = useState(null)
-  const [firstApproverName, setFirstApproverName] = useState(null)
 
   useEffect(() => {
     let mounted = true
-    const targets = []
-    if (scenario.unlock_requested_by) targets.push(scenario.unlock_requested_by)
-    if (scenario.unlock_approval_1_by) targets.push(scenario.unlock_approval_1_by)
-    if (targets.length === 0) {
+    if (!scenario.unlock_requested_by) {
       setRequesterName(null)
-      setFirstApproverName(null)
       return
     }
     ;(async () => {
       const { data } = await supabase
         .from('user_profiles')
-        .select('id, full_name')
-        .in('id', targets)
+        .select('full_name')
+        .eq('id', scenario.unlock_requested_by)
+        .maybeSingle()
       if (!mounted) return
-      const byId = new Map((data || []).map((u) => [u.id, u.full_name]))
-      setRequesterName(scenario.unlock_requested_by ? byId.get(scenario.unlock_requested_by) || null : null)
-      setFirstApproverName(scenario.unlock_approval_1_by ? byId.get(scenario.unlock_approval_1_by) || null : null)
+      setRequesterName(data?.full_name || null)
     })()
     return () => { mounted = false }
-  }, [scenario.unlock_requested_by, scenario.unlock_approval_1_by])
+  }, [scenario.unlock_requested_by])
 
   if (bannerState === 'locked_no_request') {
     return (
@@ -120,19 +117,17 @@ function LockedBanner({
         stage={stage}
         lockedByName={lockedByName}
         currentUser={currentUser}
-        hasSubmitLock={hasSubmitLock}
+        hasApproveUnlock={hasApproveUnlock}
         onRequestUnlock={onRequestUnlock}
       />
     )
   }
   return (
     <UnlockInProgressBody
-      bannerState={bannerState}
       scenario={scenario}
       aye={aye}
       stage={stage}
       requesterName={requesterName}
-      firstApproverName={firstApproverName}
       currentUser={currentUser}
       hasApproveUnlock={hasApproveUnlock}
       onApproveUnlock={onApproveUnlock}
@@ -150,7 +145,7 @@ function BaseLockedBody({
   stage,
   lockedByName,
   currentUser,
-  hasSubmitLock,
+  hasApproveUnlock,
   onRequestUnlock,
 }) {
   const dateStr = scenario.locked_at
@@ -159,7 +154,9 @@ function BaseLockedBody({
       })
     : '—'
   const isOverride = scenario.locked_via === 'override'
-  const requestGate = canRequestUnlock(scenario, currentUser, hasSubmitLock)
+  // v3.7: request gate is approve_unlock (request submission counts
+  // as approval_1, so it shares the gate with approval).
+  const requestGate = canRequestUnlock(scenario, currentUser, hasApproveUnlock)
   // Canonical name for the heading line — official identity of the
   // locked artifact, not the working scenario label (architecture §8.15).
   const canonicalName = getDisplayNameForContext('locked_banner', { scenario, aye, stage })
@@ -219,18 +216,21 @@ function BaseLockedBody({
   )
 }
 
-// States 2 + 3: amber treatment, request details visible inline,
-// action buttons gated by helper outcomes. The artifact identity does
-// not change while unlock is pending — the canonical name still applies
-// (architecture §8.15: state stays 'locked' throughout the unlock-
-// in-progress window).
+// State 2 (v3.7 collapsed banner): amber treatment, request details
+// visible inline, action buttons gated by helper outcomes. Under the
+// two-identity model, every pending unlock is awaiting its single
+// remaining approval — the request submission already covers
+// approval_1, so showing a separate "First approved by" line for the
+// same identity (the requester) would be misleading repetition.
+//
+// The artifact identity does not change while unlock is pending —
+// the canonical name still applies (architecture §8.15: state stays
+// 'locked' throughout the unlock-in-progress window).
 function UnlockInProgressBody({
-  bannerState,
   scenario,
   aye,
   stage,
   requesterName,
-  firstApproverName,
   currentUser,
   hasApproveUnlock,
   onApproveUnlock,
@@ -243,13 +243,7 @@ function UnlockInProgressBody({
         year: 'numeric', month: 'long', day: 'numeric',
       })
     : '—'
-  const firstApprovedAtStr = scenario.unlock_approval_1_at
-    ? new Date(scenario.unlock_approval_1_at).toLocaleDateString(undefined, {
-        year: 'numeric', month: 'long', day: 'numeric',
-      })
-    : null
 
-  const isFinalApproval = bannerState === 'locked_awaiting_final_approval'
   const approveGate = canApproveUnlock(scenario, currentUser, hasApproveUnlock)
   const rejectGate = canRejectUnlock(scenario, currentUser, hasApproveUnlock)
   const withdrawGate = canWithdrawUnlock(scenario, currentUser)
@@ -263,10 +257,10 @@ function UnlockInProgressBody({
 
   // The approve button is only rendered when the user *might* be able
   // to approve — i.e., they have approve_unlock and aren't blocked by
-  // a permission-only failure. Initiator-separation and
-  // first-approver-self failures still render the button as
-  // disabled-with-tooltip so the user understands the rule rather
-  // than wondering where the affordance went.
+  // a permission-only failure. Initiator-separation failures still
+  // render the button as disabled-with-tooltip so the user
+  // understands the rule rather than wondering where the affordance
+  // went.
   const showApproveButton =
     hasApproveUnlock && approveGate.reason !== 'permission_insufficient'
 
@@ -284,20 +278,15 @@ function UnlockInProgressBody({
         </span>
         <div className="flex-1 min-w-0">
           <p className="font-display text-[13px] tracking-[0.06em] uppercase mb-0.5 text-status-amber">
-            Unlock requested · {isFinalApproval ? 'awaiting final approval' : 'awaiting first approval'}
+            Unlock requested · awaiting final approval
           </p>
           <p className="text-sm text-body leading-relaxed">
             <strong className="font-medium">{canonicalName}</strong>:
             requested by{' '}
             <strong className="font-medium">{requesterName || 'unknown user'}</strong>{' '}
             on <strong className="font-medium">{requestedAtStr}</strong>.
-            {isFinalApproval && firstApproverName ? (
-              <>
-                {' '}First approved by{' '}
-                <strong className="font-medium">{firstApproverName}</strong>{' '}
-                on <strong className="font-medium">{firstApprovedAtStr}</strong>.
-              </>
-            ) : null}
+            Their submission counts as the first approval; one
+            additional approver is required to complete the unlock.
           </p>
           {scenario.unlock_request_justification && (
             <div className="mt-2 px-3 py-2 bg-white/60 border-[0.5px] border-status-amber/20 rounded text-sm">
@@ -320,7 +309,7 @@ function UnlockInProgressBody({
               title={approveDisabledTooltip}
               className="bg-navy text-gold border-[0.5px] border-navy px-3 py-1.5 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isFinalApproval ? 'Approve unlock (final)' : 'Approve unlock'}
+              Approve unlock
             </button>
           )}
           {rejectGate.ok && (
