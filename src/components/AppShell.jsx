@@ -8,22 +8,38 @@ import AYEBadge from './AYEBadge'
 // are not clickable. `lockKey` ties an item to a module code so the
 // lock indicator can light up when that module's instance is locked
 // for the current AYE. `subItems` makes an item expandable with nested
-// sub-routes; the parent itself is also navigable to its `to` path.
+// sub-routes.
+//
+// Two parent-with-children patterns coexist:
+//   - Navigable parent (current Admin / School Settings pattern):
+//     parent has `to` and `subItems`; clicking the row navigates;
+//     clicking the chevron toggles expand. `toggleOnly: true` is NOT
+//     set for these.
+//   - Toggle-only parent (Planning / Tuition + Budget pattern,
+//     architecture §3.2): parent has `subItems` and `toggleOnly: true`,
+//     no `to`. Clicking the row toggles expand; navigation happens
+//     only via clicking a child. The pattern matches section-header
+//     collapse behavior at one level of nesting deeper.
 //
 // Each labeled section has an explicit `id` used as the localStorage
 // key for collapsed-state persistence. Dashboard (label: null) has no
 // id because it isn't collapsible.
 //
-// Budget items are SLOTTED dynamically. The Budget module supports
-// configurable workflows (Migration 010); each school's stages are
-// loaded from `get_module_workflow_stages('budget')` and merged into
-// the BUDGET section at runtime. The static config below uses
-// {budgetStageSlot: N} markers indicating where stages 1, 2, 3...
-// should drop in. Schools with N stages: the first N markers are
-// filled; remaining markers vanish; extra stages append to the end
-// of the section. For Libertas (two stages), markers 1 and 2 are
-// filled; positions correspond to the historical Prelim. Budget
-// (slot 1) and Final Budget (slot 2) placements.
+// Budget stage children are SLOTTED dynamically. The Budget module
+// supports configurable workflows (Migration 010); each school's
+// stages are loaded from `get_module_workflow_stages('budget')` and
+// merged into the Budget parent's subItems at runtime. The static
+// config below uses {budgetStageSlot: N} markers indicating where
+// stages 1, 2, 3... should drop in. Schools with N stages: the first
+// N markers are filled; remaining markers vanish; extra stages
+// append after the last slot. For Libertas (two stages), markers 1
+// and 2 are filled with the Preliminary and Final stages.
+//
+// Stage child labels strip the trailing " Budget" off the workflow's
+// display_name so the parent ("Budget") carries the module name and
+// the children carry the stage names ("Preliminary" / "Final"). This
+// is a sidebar-render-only transform; other UI surfaces continue to
+// read display_name / short_name as canonical per CLAUDE.md.
 const NAV_SECTIONS = [
   {
     id: null,
@@ -52,19 +68,38 @@ const NAV_SECTIONS = [
     ],
   },
   {
-    id: 'budget',
-    label: 'Budget',
+    id: 'planning',
+    label: 'Planning',
     items: [
-      { step: 1, label: 'Enrollment',       to: '/modules/enrollment',          enabled: false, lockKey: 'enrollment_estimator' },
-      { step: 2, label: 'Tuition',          to: '/modules/tuition',             enabled: true,  lockKey: 'tuition_worksheet' },
-      { step: 3, label: 'Staffing',         to: '/modules/staffing',            enabled: false, lockKey: 'staffing' },
-      // Slot 1: first budget workflow stage. For Libertas, becomes
-      // "Prelim. Budget" pointing at /modules/budget/<stage-uuid>.
-      { budgetStageSlot: 1, step: 4 },
-      { step: 5, label: 'Enrollment Audit', to: '/modules/enrollment-audit',    enabled: false, lockKey: 'enrollment_audit' },
-      // Slot 2: second budget workflow stage. For Libertas, becomes
-      // "Final Budget".
-      { budgetStageSlot: 2, step: 6 },
+      { label: 'Enrollment Estimator', to: '/modules/enrollment', enabled: false, lockKey: 'enrollment_estimator' },
+      // Tuition collapsible parent. Today only the Planning child has
+      // an implemented destination; the Audit child appears when
+      // Phase 4d (Tuition Stage 2 setup) ships. Architecture §7.3
+      // commits to both stages.
+      {
+        label: 'Tuition',
+        toggleOnly: true,
+        enabled: true,
+        lockKey: 'tuition_worksheet',
+        subItems: [
+          { label: 'Planning', to: '/modules/tuition', enabled: true },
+          // { label: 'Audit', to: '/modules/tuition/audit', enabled: true } — Phase 4 follow-on
+        ],
+      },
+      { label: 'Staffing', to: '/modules/staffing', enabled: false, lockKey: 'staffing' },
+      // Budget collapsible parent. Both stage children render today via
+      // the budgetStageSlot resolver below; their labels are derived
+      // from the workflow loader (display_name with " Budget" stripped).
+      {
+        label: 'Budget',
+        toggleOnly: true,
+        enabled: true,
+        lockKey: 'budget',
+        subItems: [
+          { budgetStageSlot: 1 },
+          { budgetStageSlot: 2 },
+        ],
+      },
     ],
   },
   {
@@ -125,7 +160,7 @@ function loadCollapsedFromStorage() {
 // those by URL prefix here so route changes auto-expand the right section
 // even before the workflow data has loaded.
 function findSectionForPath(pathname) {
-  if (pathname.startsWith('/modules/budget/')) return 'budget'
+  if (pathname.startsWith('/modules/budget/')) return 'planning'
   for (const section of NAV_SECTIONS) {
     if (!section.id) continue
     for (const item of section.items) {
@@ -190,6 +225,24 @@ function NavRow({ item, depth = 0, active, locked, onClick, onChevronClick, expa
     )
   }
 
+  // Toggle-only parent: clicking the row toggles expand/collapse, no
+  // navigation. Architecture §3.2 — children own navigation; parent
+  // owns the section grouping. Render as a button for keyboard
+  // accessibility and aria-expanded semantics.
+  if (item.toggleOnly && item.subItems) {
+    return (
+      <button
+        type="button"
+        onClick={onChevronClick}
+        aria-expanded={expanded}
+        className={`${baseClasses} w-full text-left border-transparent text-white/70 hover:text-white hover:bg-white/[0.04] transition-colors`}
+        style={indentStyle}
+      >
+        {inner}
+      </button>
+    )
+  }
+
   if (active) {
     return (
       <div className={`${baseClasses} border-gold bg-gold/[0.10] text-white`} style={indentStyle}>
@@ -246,11 +299,15 @@ function NavItem({ item, lockedCodes }) {
         expanded={expanded}
         onChevronClick={() => setExpanded((v) => !v)}
       />
-      {expanded && item.subItems.map((sub) => {
+      {expanded && item.subItems.map((sub, idx) => {
         const subActive = sub.enabled && pathname === sub.to
+        // Slot-resolved children carry a stable _slotKey so the React
+        // identity survives across the async workflow load (placeholder
+        // and resolved label share the same slot key). Other children
+        // key off label.
         return (
           <NavRow
-            key={sub.label}
+            key={sub._slotKey || `${sub.label}-${idx}`}
             item={sub}
             depth={1}
             active={subActive}
@@ -384,64 +441,82 @@ function AppShell({ children }) {
     }
   }, [])
 
-  // Merge static NAV_SECTIONS with dynamic budget workflow stages. Each
-  // {budgetStageSlot: N} marker is replaced with the Nth stage in the
-  // workflow's sort_order, OR rendered as a disabled placeholder when
-  // the workflow has fewer stages than slots. Extra stages beyond the
-  // last slot are appended to the end of the budget section.
-  const navSections = NAV_SECTIONS.map((section) => {
-    if (section.id !== 'budget') return section
+  // Merge static NAV_SECTIONS with dynamic budget workflow stages. Slot
+  // markers ({budgetStageSlot: N}) live inside the Budget parent's
+  // subItems (planning section). Each marker is replaced with the Nth
+  // stage in the workflow's sort_order, OR rendered as a disabled
+  // placeholder when the workflow has fewer stages than slots. Extra
+  // stages beyond the last slot append after the last child.
+  //
+  // Stage child label is derived from display_name with the trailing
+  // " Budget" stripped. Parent ("Budget") carries the module name;
+  // children ("Preliminary" / "Final") carry the stage names. For
+  // schools whose display_name does not suffix with " Budget", the
+  // strip is a no-op and the original label renders.
+  function deriveBudgetStageLabel(stage) {
+    const source = stage.display_name || stage.short_name || ''
+    return source.replace(/\s*Budget$/i, '').trim() || stage.short_name || '—'
+  }
+
+  function fillBudgetSlots(parentItem) {
     const filled = []
     let highestSlot = 0
-    for (const item of section.items) {
-      if (typeof item.budgetStageSlot === 'number') {
-        highestSlot = Math.max(highestSlot, item.budgetStageSlot)
-        const stage = budgetStages[item.budgetStageSlot - 1]
+    for (const sub of parentItem.subItems) {
+      if (typeof sub.budgetStageSlot === 'number') {
+        highestSlot = Math.max(highestSlot, sub.budgetStageSlot)
+        const stage = budgetStages[sub.budgetStageSlot - 1]
         if (stage) {
           filled.push({
-            step: item.step,
-            label: stage.short_name,
+            label: deriveBudgetStageLabel(stage),
             to: `/modules/budget/${stage.stage_id}`,
             enabled: true,
             // Stage-level lock indicator deferred — module_instances
             // is per-module, not per-stage. Phase R2 wires real
             // per-stage lock indicators from budget_stage_scenarios.
             lockKey: null,
+            // Stable key: the slot number survives across renders even
+            // while the async workflow load is in flight (placeholder
+            // and resolved label both share the slot).
+            _slotKey: `slot-${sub.budgetStageSlot}`,
           })
         } else {
           // Workflow has fewer stages than slots — render disabled
-          // placeholder so the column step number stays consistent.
+          // placeholder so the slot stays present during async load.
           filled.push({
-            step: item.step,
             label: '—',
             to: '#',
             enabled: false,
             lockKey: null,
+            _slotKey: `slot-${sub.budgetStageSlot}`,
           })
         }
       } else {
-        filled.push(item)
+        filled.push(sub)
       }
     }
-    // Extra stages (beyond the static slots) append at the end with
-    // step numbers continuing past the existing range.
-    if (budgetStages.length > highestSlot) {
-      const lastStaticStep = section.items.reduce(
-        (max, it) => Math.max(max, it.step || 0),
-        0
-      )
-      for (let i = highestSlot; i < budgetStages.length; i++) {
-        const stage = budgetStages[i]
-        filled.push({
-          step: lastStaticStep + (i - highestSlot) + 1,
-          label: stage.short_name,
-          to: `/modules/budget/${stage.stage_id}`,
-          enabled: true,
-          lockKey: null,
-        })
-      }
+    // Extra stages (beyond the static slots) append after the last
+    // declared child.
+    for (let i = highestSlot; i < budgetStages.length; i++) {
+      const stage = budgetStages[i]
+      filled.push({
+        label: deriveBudgetStageLabel(stage),
+        to: `/modules/budget/${stage.stage_id}`,
+        enabled: true,
+        lockKey: null,
+        _slotKey: `slot-extra-${i}`,
+      })
     }
-    return { ...section, items: filled }
+    return { ...parentItem, subItems: filled }
+  }
+
+  const navSections = NAV_SECTIONS.map((section) => {
+    if (section.id !== 'planning') return section
+    return {
+      ...section,
+      items: section.items.map((item) =>
+        item.label === 'Budget' && item.subItems ? fillBudgetSlots(item) : item
+      ),
+    }
   })
 
   async function handleSignOut() {
@@ -512,14 +587,12 @@ function AppShell({ children }) {
                     >
                       <div className="overflow-hidden">
                         {section.items.map((item, idx) => (
-                          // Step is included in the key so two slot
-                          // placeholders that briefly share label '—'
-                          // (during the workflow-stages async load)
-                          // don't collide on `${section.id}-${label}`.
-                          // Index is the final tiebreaker for sections
-                          // whose items don't carry step numbers.
+                          // Stable key strategy: section id + index + label.
+                          // Index is the primary disambiguator (handles
+                          // duplicate labels across sections); label is the
+                          // tiebreaker for clarity in React DevTools.
                           <NavItem
-                            key={`${section.id}-${item.step ?? 'x'}-${idx}-${item.label}`}
+                            key={`${section.id}-${idx}-${item.label}`}
                             item={item}
                             lockedCodes={lockedCodes}
                           />
