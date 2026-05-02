@@ -40,6 +40,10 @@ import ApproveLockBar from '../../components/budget/ApproveLockBar'
 import LockedBanner from '../../components/budget/LockedBanner'
 import LineHistoryModal from '../../components/budget/LineHistoryModal'
 import ActivityFeedPanel from '../../components/budget/ActivityFeedPanel'
+import RequestUnlockModal from '../../components/budget/RequestUnlockModal'
+import ApproveUnlockModal from '../../components/budget/ApproveUnlockModal'
+import RejectUnlockModal from '../../components/budget/RejectUnlockModal'
+import WithdrawUnlockModal from '../../components/budget/WithdrawUnlockModal'
 
 // Stage-aware Budget page. The Budget module supports configurable
 // workflows (Migration 010 / 011) — Libertas's workflow has two stages
@@ -316,6 +320,10 @@ function BudgetStage() {
     'budget',
     'approve_lock'
   )
+  const { allowed: canApproveUnlock } = useModulePermission(
+    'budget',
+    'approve_unlock'
+  )
   const { allowed: canPbAdmin } = useModulePermission('budget', 'admin')
   const { allowed: canEditCoa } = useModulePermission(
     'chart_of_accounts',
@@ -368,6 +376,12 @@ function BudgetStage() {
   // Per-line audit history modal. Holds {lineId, accountCode,
   // accountName} when open; null when closed.
   const [lineHistoryFor, setLineHistoryFor] = useState(null)
+
+  // Unlock workflow modals. Single string controls which (if any) is
+  // open: 'request' | 'approve' | 'reject' | 'withdraw' | null. Only
+  // one unlock-related modal is open at a time, and they all act on
+  // the activeScenario, so a single piece of state suffices.
+  const [unlockModal, setUnlockModal] = useState(null)
 
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) || null,
@@ -441,7 +455,7 @@ function BudgetStage() {
         .single(),
       supabase
         .from('budget_stage_scenarios')
-        .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf, created_at, locked_at, locked_by, locked_via, override_justification')
+        .select('id, scenario_label, description, is_recommended, state, narrative, show_narrative_in_pdf, created_at, locked_at, locked_by, locked_via, override_justification, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
         .eq('aye_id', ayeId)
         .eq('stage_id', stageId)
         .order('created_at', { ascending: true }),
@@ -916,6 +930,15 @@ function BudgetStage() {
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
 
+  // Unlock workflow modal handlers. Each modal owns its own RPC call
+  // (via supabase.rpc inside the modal); on success the modal calls
+  // back here to close itself and refetch scenario state. This is
+  // the same pattern as LineHistoryModal / SubmitLockModal.
+  async function handleUnlockModalSuccess() {
+    setUnlockModal(null)
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
   const [lockedByName, setLockedByName] = useState(null)
   useEffect(() => {
     if (!activeScenario?.locked_by) {
@@ -1076,6 +1099,13 @@ function BudgetStage() {
                   <LockedBanner
                     scenario={activeScenario}
                     lockedByName={lockedByName}
+                    currentUser={user}
+                    hasSubmitLock={canSubmitLock || canPbAdmin}
+                    hasApproveUnlock={canApproveUnlock || canPbAdmin}
+                    onRequestUnlock={() => setUnlockModal('request')}
+                    onApproveUnlock={() => setUnlockModal('approve')}
+                    onRejectUnlock={() => setUnlockModal('reject')}
+                    onWithdrawUnlock={() => setUnlockModal('withdraw')}
                   />
                 )}
                 {activeScenario.state === 'pending_lock_review' && canApproveLock && (
@@ -1211,6 +1241,45 @@ function BudgetStage() {
           accountCode={lineHistoryFor.accountCode}
           accountName={lineHistoryFor.accountName}
           onClose={() => setLineHistoryFor(null)}
+        />
+      )}
+
+      {/* Unlock workflow modals. Each acts on the active scenario;
+          on success they call handleUnlockModalSuccess which closes
+          the modal and refetches scenario state. */}
+      {unlockModal === 'request' && activeScenario && (
+        <RequestUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          hasSubmitLock={canSubmitLock || canPbAdmin}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+      {unlockModal === 'approve' && activeScenario && (
+        <ApproveUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          hasApproveUnlock={canApproveUnlock || canPbAdmin}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+      {unlockModal === 'reject' && activeScenario && (
+        <RejectUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          hasApproveUnlock={canApproveUnlock || canPbAdmin}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+      {unlockModal === 'withdraw' && activeScenario && (
+        <WithdrawUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
         />
       )}
     </AppShell>

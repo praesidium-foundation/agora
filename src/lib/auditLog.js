@@ -85,27 +85,50 @@ function groupChangeLogRows(rows) {
 // Classify a grouped event into one of the high-level categories the UI
 // renders distinctly:
 //
-//   'insert'   — first appearance of the row (line created, scenario created)
-//   'delete'   — row removed (line deleted, scenario deleted)
-//   'lock'     — scenario state transition INTO 'locked'
-//   'submit'   — scenario state transition INTO 'pending_lock_review'
-//   'reject'   — scenario state transition out of 'pending_lock_review'
-//                back to 'drafting'
-//   'recommend'— is_recommended toggled true (or false)
-//   'override' — locked_via set to 'override' OR override_justification populated
-//   'amount'   — pure amount change on a budget line
-//   'edit'     — anything else (notes, label, description, etc.)
+//   'insert'              — first appearance of the row
+//   'delete'              — row removed
+//   'lock'                — scenario state transition INTO 'locked'
+//   'submit'              — scenario state transition INTO 'pending_lock_review'
+//   'reject'              — scenario state transition pending_lock_review → drafting
+//   'recommend'           — is_recommended toggled
+//   'override'            — locked_via set to 'override' OR override_justification populated
+//   'unlock_requested'    — unlock workflow: request initiated
+//   'unlock_first_approval' — unlock workflow: first of two approvals recorded
+//   'unlock_completed'    — unlock workflow: second approval recorded; state flipped to drafting
+//   'unlock_rejected'     — unlock workflow: an approver rejected the request
+//   'unlock_withdrawn'    — unlock workflow: requester withdrew their own request
+//   'amount'              — pure amount change on a budget line
+//   'edit'                — anything else (notes, label, description, etc.)
+//
+// Unlock events are detected via `event.reason` (set by app.change_reason
+// in the H1 RPC functions) BEFORE field-based heuristics, because
+// unlock_completed transitions state from 'locked' → 'drafting' which
+// doesn't match any of the existing state-based patterns and would
+// otherwise fall through to 'edit'. Reason values:
+//   'unlock_requested'             → kind 'unlock_requested'
+//   'unlock_first_approval'        → kind 'unlock_first_approval'
+//   'unlock_completed'             → kind 'unlock_completed'
+//   'unlock_rejected: <text>'      → kind 'unlock_rejected'
+//   'unlock_withdrawn: <text>'     → kind 'unlock_withdrawn'
 //
 // Multiple categories can apply to one event (a lock event also has
 // state change AND locked_at AND locked_by AND locked_via in its
 // fields list); we report the highest-priority single category in
 // `kind` and let the renderer drill into `fields` for finer detail.
-//
-// Priority order: lock > override > submit > reject > recommend >
-//                 insert > delete > amount > edit.
 export function classifyEvent(event) {
   const fields = event.fields
   const fieldByName = Object.fromEntries(fields.map((f) => [f.field_name, f]))
+
+  // Unlock workflow signatures take priority — they're identified by
+  // the change_log.reason value rather than by field-shape, so they
+  // need to be checked before state-transition heuristics.
+  if (event.reason) {
+    if (event.reason === 'unlock_requested')      return 'unlock_requested'
+    if (event.reason === 'unlock_first_approval') return 'unlock_first_approval'
+    if (event.reason === 'unlock_completed')      return 'unlock_completed'
+    if (event.reason.startsWith('unlock_rejected'))  return 'unlock_rejected'
+    if (event.reason.startsWith('unlock_withdrawn')) return 'unlock_withdrawn'
+  }
 
   if (fieldByName.__insert__) return 'insert'
   if (fieldByName.__delete__) return 'delete'
@@ -129,6 +152,18 @@ export function classifyEvent(event) {
   if (fieldByName.is_recommended) return 'recommend'
   if (fieldByName.amount) return 'amount'
   return 'edit'
+}
+
+// Extract the user-supplied reason text from a 'unlock_rejected' or
+// 'unlock_withdrawn' event's reason marker. H1's reject function
+// builds the reason as 'unlock_rejected: <text>' or
+// 'unlock_withdrawn: <text>'; this strips the prefix and returns the
+// raw user text. Returns empty string if no marker present.
+export function extractUnlockReasonText(event) {
+  if (!event?.reason) return ''
+  const colonIdx = event.reason.indexOf(': ')
+  if (colonIdx === -1) return ''
+  return event.reason.slice(colonIdx + 2).trim()
 }
 
 // Resolve a set of user uuids to { id → full_name } via user_profiles.
@@ -395,6 +430,34 @@ export function summarizeEvent(event) {
     }
     case 'override':
       return `Lock submitted with override`
+    case 'unlock_requested': {
+      // Justification was set on this UPDATE; trigger captured the
+      // null → '<text>' diff. Render it inline (no truncation —
+      // §9.1 commitment, parallel to override events).
+      const f = event.fields.find((x) => x.field_name === 'unlock_request_justification')
+      const justification = f && f.new_value ? String(f.new_value) : null
+      return justification
+        ? `Unlock requested. Reason: "${justification}"`
+        : `Unlock requested`
+    }
+    case 'unlock_first_approval':
+      return `First unlock approval recorded`
+    case 'unlock_completed':
+      return `Unlock approved. Scenario returned to drafting.`
+    case 'unlock_rejected': {
+      // Reason text is folded into change_log.reason as
+      // 'unlock_rejected: <text>'; extract via the helper.
+      const reasonText = extractUnlockReasonText(event)
+      return reasonText
+        ? `Unlock request rejected. Reason: "${reasonText}"`
+        : `Unlock request rejected`
+    }
+    case 'unlock_withdrawn': {
+      const reasonText = extractUnlockReasonText(event)
+      return reasonText
+        ? `Unlock request withdrawn. Reason: "${reasonText}"`
+        : `Unlock request withdrawn`
+    }
     case 'amount': {
       const f = event.fields.find((x) => x.field_name === 'amount')
       return `${accountLabel}: ${describeField(f)}`

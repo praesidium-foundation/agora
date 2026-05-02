@@ -181,6 +181,11 @@ function PrintFeedRow({ event }) {
     delete:    'border-l-2 border-status-red pl-3 py-1',
     amount:    'border-l-2 border-card-border pl-3 py-1',
     edit:      'border-l-2 border-card-border pl-3 py-1',
+    unlock_requested:        'border-l-4 border-status-amber bg-status-amber-bg/40 pl-3 pr-2 py-1.5',
+    unlock_first_approval:   'border-l-4 border-status-amber bg-status-amber-bg/30 pl-3 pr-2 py-1.5',
+    unlock_completed:        'border-l-4 border-status-blue bg-status-blue-bg/30 pl-3 pr-2 py-1.5',
+    unlock_rejected:         'border-l-4 border-status-red bg-status-red-bg/30 pl-3 pr-2 py-1.5',
+    unlock_withdrawn:        'border-l-2 border-card-border pl-3 py-1',
   }
   const cls = treatments[event.kind] || 'border-l-2 border-card-border pl-3 py-1'
 

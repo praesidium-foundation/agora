@@ -172,6 +172,16 @@ function EventRow({ event }) {
     submit: 'border-status-amber',
     reject: 'border-status-amber',
     recommend: 'border-gold',
+    // Unlock workflow kinds. Amber for in-progress (parallel to
+    // override). Blue for completed (mirrors lock — both are
+    // governance milestones at the symmetric ends of the
+    // lock/unlock cycle). Red-muted for rejected (denial). Plain
+    // muted for withdrawn (housekeeping, neutral).
+    unlock_requested:        'border-status-amber bg-status-amber-bg/40',
+    unlock_first_approval:   'border-status-amber bg-status-amber-bg/40',
+    unlock_completed:        'border-status-blue bg-status-blue-bg/40',
+    unlock_rejected:         'border-status-red bg-status-red-bg/30',
+    unlock_withdrawn:        'border-card-border bg-cream-highlight/40',
   }
   const cls = kindStyles[event.kind] || 'border-card-border'
 
@@ -215,16 +225,21 @@ function EventRow({ event }) {
 
 function labelForKind(kind) {
   switch (kind) {
-    case 'insert':    return 'Created'
-    case 'delete':    return 'Deleted'
-    case 'amount':    return 'Amount changed'
-    case 'edit':      return 'Edited'
-    case 'lock':      return 'Scenario locked'
-    case 'override':  return 'Override applied'
-    case 'submit':    return 'Submitted for lock review'
-    case 'reject':    return 'Rejected back to drafting'
-    case 'recommend': return 'Recommended status changed'
-    default:          return 'Change'
+    case 'insert':                return 'Created'
+    case 'delete':                return 'Deleted'
+    case 'amount':                return 'Amount changed'
+    case 'edit':                  return 'Edited'
+    case 'lock':                  return 'Scenario locked'
+    case 'override':              return 'Override applied'
+    case 'submit':                return 'Submitted for lock review'
+    case 'reject':                return 'Rejected back to drafting'
+    case 'recommend':             return 'Recommended status changed'
+    case 'unlock_requested':      return 'Unlock requested'
+    case 'unlock_first_approval': return 'Unlock — first approval'
+    case 'unlock_completed':      return 'Unlock approved · returned to drafting'
+    case 'unlock_rejected':       return 'Unlock request rejected'
+    case 'unlock_withdrawn':      return 'Unlock request withdrawn'
+    default:                      return 'Change'
   }
 }
 

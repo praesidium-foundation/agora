@@ -220,9 +220,21 @@ function FeedRow({ event }) {
     delete:    'border-status-red',
     amount:    'border-card-border',
     edit:      'border-card-border',
+    // Unlock workflow kinds — see LineHistoryModal for the rationale
+    // (amber for in-progress, blue for completed, red-muted for
+    // rejected, plain muted for withdrawn).
+    unlock_requested:        'border-status-amber bg-status-amber-bg/50',
+    unlock_first_approval:   'border-status-amber bg-status-amber-bg/40',
+    unlock_completed:        'border-status-blue bg-status-blue-bg/40',
+    unlock_rejected:         'border-status-red bg-status-red-bg/30',
+    unlock_withdrawn:        'border-card-border bg-cream-highlight/40',
   }
   const cls = treatments[event.kind] || 'border-card-border'
-  const isGov = ['lock', 'override'].includes(event.kind)
+  const isGov = [
+    'lock', 'override',
+    'unlock_requested', 'unlock_first_approval', 'unlock_completed',
+    'unlock_rejected', 'unlock_withdrawn',
+  ].includes(event.kind)
 
   // Override events render the full justification text underneath the
   // summary (architectural commitment to override visibility).
@@ -232,12 +244,18 @@ function FeedRow({ event }) {
     if (f && f.new_value) overrideJustification = String(f.new_value)
   }
 
+  // Lock-icon affordance: 🔒 for lock, 🔓 for unlock-completed
+  // (mirrors LockedBanner's icon language for the unlock states).
+  let icon = null
+  if (event.kind === 'lock') icon = { glyph: '🔒', tone: 'text-status-blue' }
+  if (event.kind === 'unlock_completed') icon = { glyph: '🔓', tone: 'text-status-blue' }
+
   return (
     <li className={`pl-3 pr-2 py-1.5 border-l-2 ${cls} ${isGov ? 'rounded-r' : ''}`}>
       <div className="flex items-baseline justify-between gap-3">
         <div className="flex items-baseline gap-2 min-w-0">
-          {event.kind === 'lock' && (
-            <span className="text-status-blue text-[12px]" aria-hidden="true">🔒</span>
+          {icon && (
+            <span className={`${icon.tone} text-[12px]`} aria-hidden="true">{icon.glyph}</span>
           )}
           <span className="font-body text-body text-[13px]">
             <span className="text-muted">{event.changed_by_name || '(unknown)'}</span>
