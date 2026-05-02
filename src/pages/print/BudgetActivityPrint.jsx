@@ -140,8 +140,13 @@ export default function BudgetActivityPrint() {
       generatedByName={printerName}
       backTo={`/modules/budget/${data.stage.id}`}
     >
-      <section className="mb-5">
-        <p className="font-body text-[11pt] text-body">
+      {/* Audit log PDFs render at reference-document density (v3.6) —
+          smaller text, tighter spacing than Operating Budget Detail.
+          These are reference artifacts (think SEC filing exhibits),
+          not presentation pieces. Full justification / reason text
+          remains visible inline (no truncation, §9.1 commitment). */}
+      <section className="mb-3">
+        <p className="font-body text-[9.5pt] text-body leading-snug">
           {events.length} event{events.length === 1 ? '' : 's'} recorded.
           {firstEventDate && lastEventDate && (
             <span className="text-muted">
@@ -152,18 +157,18 @@ export default function BudgetActivityPrint() {
       </section>
 
       {events.length === 0 ? (
-        <p className="font-body italic text-muted text-[11pt]">
+        <p className="font-body italic text-muted text-[9.5pt]">
           No activity captured for this scenario yet.
         </p>
       ) : (
-        <ol className="space-y-2">
+        <ol className="space-y-1">
           {events.map((event, i) => (
             <PrintFeedRow key={i} event={event} />
           ))}
         </ol>
       )}
 
-      <p className="font-body text-muted text-[10pt] italic mt-8">
+      <p className="font-body text-muted text-[8.5pt] italic mt-6">
         Source: Agora activity log for "{data.scenario.scenario_label}".
       </p>
     </PrintShell>
@@ -171,23 +176,24 @@ export default function BudgetActivityPrint() {
 }
 
 function PrintFeedRow({ event }) {
+  // v3.6: tighter padding throughout for reference-document density.
   const treatments = {
-    lock:      'border-l-4 border-status-blue bg-status-blue-bg/30 pl-3 pr-2 py-1.5',
-    override:  'border-l-4 border-status-amber bg-status-amber-bg/40 pl-3 pr-2 py-1.5',
-    submit:    'border-l-2 border-status-amber pl-3 py-1',
-    reject:    'border-l-2 border-status-amber pl-3 py-1',
-    recommend: 'border-l-2 border-gold pl-3 py-1',
-    insert:    'border-l-2 border-status-green pl-3 py-1',
-    delete:    'border-l-2 border-status-red pl-3 py-1',
-    amount:    'border-l-2 border-card-border pl-3 py-1',
-    edit:      'border-l-2 border-card-border pl-3 py-1',
-    unlock_requested:        'border-l-4 border-status-amber bg-status-amber-bg/40 pl-3 pr-2 py-1.5',
-    unlock_first_approval:   'border-l-4 border-status-amber bg-status-amber-bg/30 pl-3 pr-2 py-1.5',
-    unlock_completed:        'border-l-4 border-status-blue bg-status-blue-bg/30 pl-3 pr-2 py-1.5',
-    unlock_rejected:         'border-l-4 border-status-red bg-status-red-bg/30 pl-3 pr-2 py-1.5',
-    unlock_withdrawn:        'border-l-2 border-card-border pl-3 py-1',
+    lock:      'border-l-4 border-status-blue bg-status-blue-bg/30 pl-2 pr-2 py-1',
+    override:  'border-l-4 border-status-amber bg-status-amber-bg/40 pl-2 pr-2 py-1',
+    submit:    'border-l-2 border-status-amber pl-2 py-0.5',
+    reject:    'border-l-2 border-status-amber pl-2 py-0.5',
+    recommend: 'border-l-2 border-gold pl-2 py-0.5',
+    insert:    'border-l-2 border-status-green pl-2 py-0.5',
+    delete:    'border-l-2 border-status-red pl-2 py-0.5',
+    amount:    'border-l-2 border-card-border pl-2 py-0.5',
+    edit:      'border-l-2 border-card-border pl-2 py-0.5',
+    unlock_requested:        'border-l-4 border-status-amber bg-status-amber-bg/40 pl-2 pr-2 py-1',
+    unlock_first_approval:   'border-l-4 border-status-amber bg-status-amber-bg/30 pl-2 pr-2 py-1',
+    unlock_completed:        'border-l-4 border-status-blue bg-status-blue-bg/30 pl-2 pr-2 py-1',
+    unlock_rejected:         'border-l-4 border-status-red bg-status-red-bg/30 pl-2 pr-2 py-1',
+    unlock_withdrawn:        'border-l-2 border-card-border pl-2 py-0.5',
   }
-  const cls = treatments[event.kind] || 'border-l-2 border-card-border pl-3 py-1'
+  const cls = treatments[event.kind] || 'border-l-2 border-card-border pl-2 py-0.5'
 
   let overrideJustification = null
   if (event.kind === 'override') {
@@ -198,7 +204,7 @@ function PrintFeedRow({ event }) {
   return (
     <li className={cls}>
       <div className="flex items-baseline justify-between gap-3">
-        <span className="font-body text-body text-[10.5pt]">
+        <span className="font-body text-body text-[9pt] leading-snug">
           {event.kind === 'lock' && (
             <span className="text-status-blue mr-1" aria-hidden="true">🔒</span>
           )}
@@ -206,12 +212,14 @@ function PrintFeedRow({ event }) {
           {' — '}
           {summarizeEvent(event)}
         </span>
-        <span className="font-body text-muted text-[9pt] tabular-nums whitespace-nowrap">
+        <span className="font-body text-muted text-[8pt] tabular-nums whitespace-nowrap">
           {formatAbsoluteTimestamp(event.changed_at)}
         </span>
       </div>
+      {/* Override justification preserved at full text — never
+          truncated, per §9.1 architectural commitment. */}
       {overrideJustification && (
-        <p className="font-body text-status-amber text-[9.5pt] italic mt-0.5">
+        <p className="font-body text-status-amber text-[8.5pt] italic mt-0.5">
           Justification: "{overrideJustification}"
         </p>
       )}

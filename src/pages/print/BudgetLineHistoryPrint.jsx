@@ -171,23 +171,28 @@ export default function BudgetLineHistoryPrint() {
       generatedByName={printerName}
       backTo={`/modules/budget/${data.stage.id}`}
     >
-      <p className="font-body text-muted text-[11pt] mb-3">
+      {/* Reference-document density (v3.6): smaller text and tighter
+          spacing than Operating Budget Detail. Audit log PDFs are
+          reference artifacts, not presentation pieces. Field-level
+          diffs and reason text remain at full content (no truncation,
+          §9.1 commitment). */}
+      <p className="font-body text-muted text-[9.5pt] mb-2">
         {data.events.length} event{data.events.length === 1 ? '' : 's'} captured.
       </p>
       {data.events.length === 0 ? (
-        <p className="font-body italic text-muted">
+        <p className="font-body italic text-muted text-[9.5pt]">
           No history captured for this line. (If the line is brand-new
           and was created before the change_log trigger was active, no
           events will appear.)
         </p>
       ) : (
-        <ol className="space-y-3">
+        <ol className="space-y-1.5">
           {data.events.map((event, i) => (
             <PrintEvent key={i} event={event} />
           ))}
         </ol>
       )}
-      <p className="font-body text-muted text-[10pt] italic mt-8">
+      <p className="font-body text-muted text-[8.5pt] italic mt-6">
         Source: Agora change log for budget line {lineId}.
       </p>
     </PrintShell>
@@ -195,23 +200,24 @@ export default function BudgetLineHistoryPrint() {
 }
 
 function PrintEvent({ event }) {
+  // v3.6: tighter padding for reference-document density.
   const treatments = {
-    lock:      'border-l-4 border-status-blue bg-status-blue-bg/30 px-3 py-2',
-    override:  'border-l-4 border-status-amber bg-status-amber-bg/40 px-3 py-2',
-    submit:    'border-l-2 border-status-amber pl-3',
-    reject:    'border-l-2 border-status-amber pl-3',
-    recommend: 'border-l-2 border-gold pl-3',
-    insert:    'border-l-2 border-status-green pl-3',
-    delete:    'border-l-2 border-status-red pl-3',
-    amount:    'border-l-2 border-card-border pl-3',
-    edit:      'border-l-2 border-card-border pl-3',
-    unlock_requested:        'border-l-4 border-status-amber bg-status-amber-bg/40 px-3 py-2',
-    unlock_first_approval:   'border-l-4 border-status-amber bg-status-amber-bg/30 px-3 py-2',
-    unlock_completed:        'border-l-4 border-status-blue bg-status-blue-bg/30 px-3 py-2',
-    unlock_rejected:         'border-l-4 border-status-red bg-status-red-bg/30 px-3 py-2',
-    unlock_withdrawn:        'border-l-2 border-card-border pl-3',
+    lock:      'border-l-4 border-status-blue bg-status-blue-bg/30 px-2 py-1',
+    override:  'border-l-4 border-status-amber bg-status-amber-bg/40 px-2 py-1',
+    submit:    'border-l-2 border-status-amber pl-2 py-0.5',
+    reject:    'border-l-2 border-status-amber pl-2 py-0.5',
+    recommend: 'border-l-2 border-gold pl-2 py-0.5',
+    insert:    'border-l-2 border-status-green pl-2 py-0.5',
+    delete:    'border-l-2 border-status-red pl-2 py-0.5',
+    amount:    'border-l-2 border-card-border pl-2 py-0.5',
+    edit:      'border-l-2 border-card-border pl-2 py-0.5',
+    unlock_requested:        'border-l-4 border-status-amber bg-status-amber-bg/40 px-2 py-1',
+    unlock_first_approval:   'border-l-4 border-status-amber bg-status-amber-bg/30 px-2 py-1',
+    unlock_completed:        'border-l-4 border-status-blue bg-status-blue-bg/30 px-2 py-1',
+    unlock_rejected:         'border-l-4 border-status-red bg-status-red-bg/30 px-2 py-1',
+    unlock_withdrawn:        'border-l-2 border-card-border pl-2 py-0.5',
   }
-  const cls = treatments[event.kind] || 'border-l-2 border-card-border pl-3'
+  const cls = treatments[event.kind] || 'border-l-2 border-card-border pl-2 py-0.5'
 
   const real = event.fields.filter(
     (f) => f.field_name !== '__insert__' && f.field_name !== '__delete__'
@@ -222,30 +228,30 @@ function PrintEvent({ event }) {
   return (
     <li className={cls}>
       <div className="flex items-baseline justify-between gap-3 mb-0.5">
-        <span className="font-body text-body text-[11pt] font-medium">
+        <span className="font-body text-body text-[9.5pt] font-medium">
           {labelForKind(event.kind)}
         </span>
-        <span className="font-body text-muted text-[9pt] tabular-nums whitespace-nowrap">
+        <span className="font-body text-muted text-[8pt] tabular-nums whitespace-nowrap">
           {formatAbsoluteTimestamp(event.changed_at)}
         </span>
       </div>
-      <p className="font-body text-muted text-[10pt]">
+      <p className="font-body text-muted text-[8.5pt]">
         {event.changed_by_name || '(unknown user)'}
       </p>
       {insertField && (
-        <p className="font-body text-body text-[10pt] italic mt-1">
+        <p className="font-body text-body text-[8.5pt] italic mt-0.5">
           Created with amount {fmtUsd(insertField.new_value?.amount)}
         </p>
       )}
       {deleteField && (
-        <p className="font-body text-body text-[10pt] italic mt-1">
+        <p className="font-body text-body text-[8.5pt] italic mt-0.5">
           Removed (last amount: {fmtUsd(deleteField.old_value?.amount)})
         </p>
       )}
       {real.length > 0 && (
-        <ul className="mt-1 space-y-0.5">
+        <ul className="mt-0.5 space-y-0">
           {real.map((f, i) => (
-            <li key={i} className="font-body text-body text-[10pt]">
+            <li key={i} className="font-body text-body text-[8.5pt] leading-snug">
               {describeField(f)}
             </li>
           ))}

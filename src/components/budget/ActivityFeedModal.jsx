@@ -1,15 +1,24 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   fetchScenarioActivity,
   formatActivityTimestamp,
   summarizeEvent,
 } from '../../lib/auditLog'
 
-// Per-scenario activity feed.
+// Per-scenario activity feed — modal shell.
 //
-// Renders below the page header zone (under the breadcrumb/title) as a
-// collapsible panel. Default state: collapsed, showing just the count
-// of events. Click to expand into the chronological feed.
+// Phase 2 polish (v3.6) relocated this from a cream-highlight banner
+// above the budget detail to a "Recent Activity" link in the scenario
+// tabs row. The link opens this modal. The internal feed UI (count
+// dropdown, filter dropdown, FeedRow list, PDF export link) is
+// unchanged from the prior inline-panel version — only the shell
+// changed (panel → modal).
+//
+// Why a modal: visual weight reduction. The cream-highlight banner
+// competed with the Income heading; a right-aligned text link in the
+// tabs row is appropriately sized for an audit affordance, and the
+// modal pattern matches LineHistoryModal / SubmitLockModal — the
+// established convention for "open a focused governance surface".
 //
 // Props:
 //   scenarioId   — uuid of the active scenario; refetches when it changes
@@ -17,16 +26,14 @@ import {
 //                  line events into "Curriculum/Book Fees ($0 → $9,750)"
 //                  format. BudgetStage already loads accounts; pass
 //                  through.
+//   onClose      — () => void
 //
-// The feed fetches the most recent N events (default 25), with a count
-// dropdown to bump up to 50/100/All. Filter dropdown narrows by event
-// category. Each filter+count change triggers a refetch (cheap — events
-// are scoped to the scenario).
-//
-// PDF export: footer link → /print/budget/:scenarioId/activity. The
-// print route fetches its own data; in-app filter state is NOT
-// transmitted (architectural commitment: PDFs are always reproducible
-// from the route alone).
+// Filter state and count selections are local to the modal session —
+// closing and reopening resets to defaults (25 events, all activity).
+// PDF export goes through /print/budget/:scenarioId/activity which
+// fetches its own data; in-app filter state is NOT transmitted to the
+// print route (architectural commitment: PDFs are reproducible from
+// the URL alone).
 
 const COUNT_OPTIONS = [
   { value: 10,    label: '10' },
@@ -46,7 +53,9 @@ const FILTER_OPTIONS = [
 function passesFilter(event, filter) {
   if (filter === 'all') return true
   if (filter === 'governance') {
-    return ['lock', 'submit', 'reject', 'override', 'recommend'].includes(event.kind)
+    return ['lock', 'submit', 'reject', 'override', 'recommend',
+      'unlock_requested', 'unlock_first_approval', 'unlock_completed',
+      'unlock_rejected', 'unlock_withdrawn'].includes(event.kind)
   }
   if (filter === 'edits') {
     return ['amount', 'edit', 'insert', 'delete'].includes(event.kind)
@@ -54,19 +63,24 @@ function passesFilter(event, filter) {
   return true
 }
 
-export default function ActivityFeedPanel({ scenarioId, accountsById }) {
-  const [open, setOpen] = useState(false)
+export default function ActivityFeedModal({ scenarioId, accountsById, onClose }) {
   const [count, setCount] = useState(25)
   const [filter, setFilter] = useState('all')
   const [events, setEvents] = useState(null)
   const [error, setError] = useState(null)
-  // totalKnownEvents: the un-paginated count of events for the
-  // collapsed-state label. Re-fetched once when the panel mounts (we
-  // don't refetch on filter/count changes for that label — it's
-  // intentionally the unfiltered total).
   const [totalKnownEvents, setTotalKnownEvents] = useState(null)
 
-  // Fetch the unfiltered total once per scenarioId for the header.
+  // Escape closes the modal (consistent with other modals).
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Fetch the unfiltered total once per scenarioId for the header
+  // count display.
   useEffect(() => {
     if (!scenarioId) return
     let mounted = true
@@ -82,23 +96,18 @@ export default function ActivityFeedPanel({ scenarioId, accountsById }) {
       }
     })()
     return () => { mounted = false }
-    // accountsById intentionally omitted: only re-fetch on scenarioId
-    // change. The displayed labels degrade gracefully if accountsById
-    // arrives later.
+    // accountsById intentionally omitted: only re-fetch on scenarioId change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenarioId])
 
-  // Fetch the displayed slice when the panel is open and the
-  // count/filter/scenarioId changes.
+  // Fetch the displayed slice when count/filter/scenarioId changes.
   useEffect(() => {
-    if (!open || !scenarioId) return
+    if (!scenarioId) return
     let mounted = true
     setError(null)
     setEvents(null)
     ;(async () => {
       try {
-        // Always fetch up to count*2 to give the filter pass enough
-        // headroom, then slice client-side. For 'All' we fetch all.
         const fetchLimit = count == null ? null : Math.max(count * 3, count)
         const all = await fetchScenarioActivity(scenarioId, {
           limit: fetchLimit,
@@ -115,73 +124,93 @@ export default function ActivityFeedPanel({ scenarioId, accountsById }) {
     return () => { mounted = false }
     // accountsById intentionally omitted (see note above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, scenarioId, count, filter])
+  }, [scenarioId, count, filter])
 
-  const headerLabel = useMemo(() => {
-    if (totalKnownEvents == null) return 'Recent Activity'
-    return `Recent Activity (${totalKnownEvents} ${totalKnownEvents === 1 ? 'change' : 'changes'})`
-  }, [totalKnownEvents])
+  const headerCount =
+    totalKnownEvents == null
+      ? null
+      : `${totalKnownEvents} ${totalKnownEvents === 1 ? 'change' : 'changes'}`
 
   return (
-    <section className="mt-3 border-[0.5px] border-card-border rounded bg-cream-highlight/30">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="w-full flex items-center justify-between gap-3 px-4 py-2 hover:bg-cream-highlight/60 transition-colors text-left"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/30"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-cream border-[0.5px] border-card-border rounded-[10px] max-w-3xl w-full p-0 shadow-lg max-h-[85vh] flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="activity-feed-title"
       >
-        <span className="font-display text-navy text-[13px] tracking-[0.06em] uppercase">
-          {headerLabel}
-        </span>
-        <span className="text-muted text-[12px]" aria-hidden="true">
-          {open ? '▾' : '▸'}
-        </span>
-      </button>
-
-      {open && (
-        <div className="border-t-[0.5px] border-card-border px-4 py-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
-            <div className="flex items-center gap-2">
-              <label className="font-body text-[11px] text-muted uppercase tracking-wider">
-                Show
-              </label>
-              <select
-                value={String(count)}
-                onChange={(e) =>
-                  setCount(e.target.value === 'null' ? null : Number(e.target.value))
-                }
-                className="bg-white border-[0.5px] border-card-border text-body px-2 py-1 rounded text-[12px]"
-              >
-                {COUNT_OPTIONS.map((o) => (
-                  <option key={String(o.value)} value={String(o.value)}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-
-              <label className="font-body text-[11px] text-muted uppercase tracking-wider ml-3">
-                Filter
-              </label>
-              <select
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                className="bg-white border-[0.5px] border-card-border text-body px-2 py-1 rounded text-[12px]"
-              >
-                {FILTER_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-            <a
-              href={`/print/budget/${scenarioId}/activity`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-body text-status-blue hover:underline text-[12px]"
+        <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b-[0.5px] border-card-border">
+          <div>
+            <h3
+              id="activity-feed-title"
+              className="font-display text-navy text-[18px] leading-tight"
             >
-              Export as PDF
-            </a>
+              Recent Activity
+            </h3>
+            {headerCount && (
+              <p className="font-body text-muted text-[12px] mt-0.5">
+                {headerCount} on this scenario
+              </p>
+            )}
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="text-muted hover:text-navy text-[18px] leading-none"
+          >
+            ×
+          </button>
+        </div>
 
+        <div className="flex items-center justify-between gap-3 flex-wrap px-6 py-2 border-b-[0.5px] border-card-border bg-cream-highlight/30">
+          <div className="flex items-center gap-2">
+            <label className="font-body text-[11px] text-muted uppercase tracking-wider">
+              Show
+            </label>
+            <select
+              value={String(count)}
+              onChange={(e) =>
+                setCount(e.target.value === 'null' ? null : Number(e.target.value))
+              }
+              className="bg-white border-[0.5px] border-card-border text-body px-2 py-1 rounded text-[12px]"
+            >
+              {COUNT_OPTIONS.map((o) => (
+                <option key={String(o.value)} value={String(o.value)}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+
+            <label className="font-body text-[11px] text-muted uppercase tracking-wider ml-3">
+              Filter
+            </label>
+            <select
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="bg-white border-[0.5px] border-card-border text-body px-2 py-1 rounded text-[12px]"
+            >
+              {FILTER_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <a
+            href={`/print/budget/${scenarioId}/activity`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-body text-status-blue hover:underline text-[12px]"
+          >
+            Export as PDF
+          </a>
+        </div>
+
+        <div className="px-6 py-4 overflow-y-auto flex-1">
           {error && (
             <p className="text-status-red text-sm" role="alert">{error}</p>
           )}
@@ -201,8 +230,18 @@ export default function ActivityFeedPanel({ scenarioId, accountsById }) {
             </ul>
           )}
         </div>
-      )}
-    </section>
+
+        <div className="flex items-center justify-end gap-4 px-6 py-3 border-t-[0.5px] border-card-border">
+          <button
+            type="button"
+            onClick={onClose}
+            className="bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -220,9 +259,9 @@ function FeedRow({ event }) {
     delete:    'border-status-red',
     amount:    'border-card-border',
     edit:      'border-card-border',
-    // Unlock workflow kinds — see LineHistoryModal for the rationale
-    // (amber for in-progress, blue for completed, red-muted for
-    // rejected, plain muted for withdrawn).
+    // Unlock workflow kinds — amber for in-progress, blue for
+    // completed (mirrors lock as a governance milestone), red-muted
+    // for rejected, plain muted for withdrawn.
     unlock_requested:        'border-status-amber bg-status-amber-bg/50',
     unlock_first_approval:   'border-status-amber bg-status-amber-bg/40',
     unlock_completed:        'border-status-blue bg-status-blue-bg/40',
@@ -244,8 +283,7 @@ function FeedRow({ event }) {
     if (f && f.new_value) overrideJustification = String(f.new_value)
   }
 
-  // Lock-icon affordance: 🔒 for lock, 🔓 for unlock-completed
-  // (mirrors LockedBanner's icon language for the unlock states).
+  // Lock-icon affordance: 🔒 for lock, 🔓 for unlock-completed.
   let icon = null
   if (event.kind === 'lock') icon = { glyph: '🔒', tone: 'text-status-blue' }
   if (event.kind === 'unlock_completed') icon = { glyph: '🔓', tone: 'text-status-blue' }

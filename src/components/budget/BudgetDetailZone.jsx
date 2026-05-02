@@ -124,15 +124,27 @@ function AmountEditor({ initial, onSave, onCancel, onTab }) {
 
 // One row in the tree. Posting accounts get the editable treatment;
 // summary accounts render as category headers with rollup totals.
-function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editableSeq, onShowLineHistory }) {
+//
+// Tier mapping (architecture §10.4 — applied in-app from v3.6):
+//   - depth = 0, !isPosting   → Tier 2 (top-level summary like
+//                                "Educational Program Revenue", "Personnel")
+//   - depth ≥ 1, !isPosting   → Tier 3 (mid-level summary like
+//                                "Tuition Discounts", "Payroll")
+//   - isPosting                → Tier 4 (leaf posting account)
+// Tier 1 is the synthetic INCOME / EXPENSES heading rendered by
+// TopGroup, not by Row.
+//
+// Each tier reads strongly enough that the eye can place itself in
+// the hierarchy without leaning on indentation alone or on the input
+// chrome (which goes away in locked state).
+function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editableSeq, onShowLineHistory, hideLineHistory }) {
   const isPosting = node.posts_directly
   const hasLine = node.line !== null
   const amount = hasLine ? node.line.amount : 0
   const isLinked = node.line && node.line.source_type !== 'manual'
   const isInactive = !node.is_active
 
-  // When this row is being edited, render the editor; otherwise render
-  // the value (clickable when editable).
+  const tier = isPosting ? 4 : (depth === 0 ? 2 : 3)
   const editingThisRow = editing.accountId === node.id
 
   function handleClick() {
@@ -158,12 +170,40 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
   // INCOME/EXPENSES heading which is rendered separately).
   const indentPx = 18 * (depth + 1)
 
+  // Per-tier row treatment. Tier 2 carries a thin navy bottom rule
+  // (the screen analog of the PDF's "thin navy rule" under top-level
+  // summaries). Tier 3 has no rule. Tier 4 has a faint card-border
+  // rule for row separation. Vertical padding scales with tier so
+  // summaries get breathing room and leaves stay tight.
+  const rowFrame =
+    tier === 2
+      ? 'py-2 pt-3 border-b-[0.5px] border-navy/25 bg-cream-highlight/30'
+      : tier === 3
+        ? 'py-1.5 pt-2 border-b-[0.5px] border-card-border/60'
+        : 'py-1 border-b-[0.5px] border-card-border hover:bg-cream-highlight/40'
+
+  // Per-tier name styling.
+  const nameClass =
+    tier === 2
+      ? 'font-body font-semibold text-navy text-[15px] tracking-[0.02em] flex-1 min-w-0 truncate'
+      : tier === 3
+        ? 'font-body font-medium text-navy text-[13.5px] flex-1 min-w-0 truncate'
+        : 'font-body text-[13px] text-navy/85 flex-1 min-w-0 truncate'
+
+  // Per-tier rollup amount styling. Editable input in Tier 4 keeps
+  // its own treatment; Tier 4 read-only and the summary tiers all
+  // route through here for the right-aligned amount text.
+  const rollupClass =
+    tier === 2
+      ? 'text-right tabular-nums font-body font-semibold text-[15px] w-32 flex-shrink-0'
+      : 'text-right tabular-nums font-body font-medium text-[13.5px] w-32 flex-shrink-0'
+
   return (
     <>
       <div
-        className={`flex items-center gap-3 py-1.5 pr-3 border-b-[0.5px] border-card-border ${
+        className={`flex items-center gap-3 pr-3 ${rowFrame} ${
           isInactive ? 'opacity-50' : ''
-        } ${isPosting ? 'hover:bg-cream-highlight/60' : 'bg-cream-highlight/40'}`}
+        }`}
         style={{ paddingLeft: `${indentPx}px` }}
       >
         {/* Caret column for summary rows. Posting rows get a fixed-width
@@ -174,17 +214,15 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
         {isPosting && <span className="w-3" aria-hidden="true" />}
 
         {node.code && (
-          <span className="font-body text-[12px] text-muted tabular-nums w-12 flex-shrink-0">
+          <span className={`font-body tabular-nums w-12 flex-shrink-0 ${
+            tier === 4 ? 'text-[11px] text-navy/55' : 'text-[12px] text-muted'
+          }`}>
             {node.code}
           </span>
         )}
         {!node.code && <span className="w-12 flex-shrink-0" />}
 
-        <span
-          className={`font-body flex-1 min-w-0 truncate ${
-            isPosting ? 'text-body text-[14px]' : 'text-navy text-[14px] tracking-[0.04em]'
-          }`}
-        >
+        <span className={nameClass}>
           {node.name}
         </span>
 
@@ -206,8 +244,11 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
             line get a small clock icon to the right of the amount; the
             click hands the line off to the parent which opens the
             LineHistoryModal. Hidden when there's no handler (e.g.,
-            print routes don't pass one) or no line yet. */}
-        {isPosting && hasLine && onShowLineHistory && (
+            print routes don't pass one), no line yet, or hideLineHistory
+            is true (locked state — per-line drilldown is editing-mode
+            functionality; the activity feed covers locked-state audit
+            exploration). */}
+        {isPosting && hasLine && onShowLineHistory && !hideLineHistory && (
           <button
             type="button"
             onClick={(e) => {
@@ -225,7 +266,10 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
         {/* Amount cell. Posting accounts: clickable to edit (or editor
             when active). Summary accounts: rollup total, read-only.
             Editable cells render with an input-style outline so it's
-            obvious at a glance which fields the user can adjust. */}
+            obvious at a glance which fields the user can adjust. The
+            input chrome is intentionally quieter than the strengthened
+            Tier 2/3 typography around it — hierarchy reads first;
+            editability reads second. */}
         {isPosting ? (
           editingThisRow && !readOnly && !isLinked ? (
             <AmountEditor
@@ -241,21 +285,18 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
             // Non-editable posting amount (locked scenario or auto-pulled
             // upstream value): plain text, no input affordance.
             <span
-              className={`text-right tabular-nums px-2 py-1 font-body text-[14px] w-32 flex-shrink-0 ${
-                amount < 0 ? 'text-status-red' : 'text-body'
+              className={`text-right tabular-nums px-2 py-1 font-body text-[13px] w-32 flex-shrink-0 ${
+                amount < 0 ? 'text-status-red' : 'text-navy/85'
               }`}
             >
               {fmtUsd(amount)}
             </span>
           ) : (
-            // Editable: render as a ghost input. Visible 0.5px border
-            // and white fill make the field-shape unmistakable; hover
-            // intensifies the border so the click target is obvious.
             <button
               type="button"
               onClick={handleClick}
-              className={`text-right tabular-nums px-2 py-1 rounded font-body text-[14px] w-32 flex-shrink-0 bg-white border-[0.5px] border-card-border cursor-text hover:border-navy/50 hover:bg-cream-highlight/40 transition-colors ${
-                amount < 0 ? 'text-status-red' : 'text-body'
+              className={`text-right tabular-nums px-2 py-1 rounded font-body text-[13px] w-32 flex-shrink-0 bg-white border-[0.5px] border-card-border cursor-text hover:border-navy/40 hover:bg-cream-highlight/40 transition-colors ${
+                amount < 0 ? 'text-status-red' : 'text-navy/85'
               }`}
               aria-label={`Edit amount for ${node.name}`}
               title="Click to edit"
@@ -265,8 +306,8 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
           )
         ) : (
           <span
-            className={`text-right tabular-nums font-body text-[14px] w-32 flex-shrink-0 ${
-              node.rollup < 0 ? 'text-status-red' : 'text-navy font-medium'
+            className={`${rollupClass} ${
+              node.rollup < 0 ? 'text-status-red' : 'text-navy'
             }`}
           >
             {fmtUsd(node.rollup)}
@@ -285,6 +326,7 @@ function Row({ node, depth, editing, setEditing, readOnly, onSaveAmount, editabl
           onSaveAmount={onSaveAmount}
           editableSeq={editableSeq}
           onShowLineHistory={onShowLineHistory}
+          hideLineHistory={hideLineHistory}
         />
       ))}
     </>
@@ -300,19 +342,22 @@ function linkedSourceLabel(sourceType) {
   }
 }
 
-// Synthetic top-level group (INCOME / EXPENSES). The label is rendered
-// in a heading-like band; the rolled-up total sits at the right.
-function TopGroup({ group, editing, setEditing, readOnly, onSaveAmount, editableSeq, onShowLineHistory }) {
+// Synthetic top-level group (INCOME / EXPENSES). Tier 1 in the
+// four-tier hierarchy (architecture §10.4). Cinzel display face, gold
+// underline accent — the screen analog of the PDF's gold underline.
+// Generous vertical breathing room above and below so the eye reads
+// "this is a category" without effort.
+function TopGroup({ group, editing, setEditing, readOnly, onSaveAmount, editableSeq, onShowLineHistory, hideLineHistory }) {
   return (
-    <div className="mb-6">
-      <div className="flex items-center gap-3 px-2 py-2 border-b-[0.5px] border-navy/30">
+    <div className="mb-8">
+      <div className="flex items-center gap-3 px-2 py-3 border-b-2 border-gold/60">
         <span className="w-3 text-navy text-[10px]" aria-hidden="true">▾</span>
         <span className="w-12 flex-shrink-0" />
-        <span className="font-display text-navy text-[15px] tracking-[0.10em] uppercase flex-1">
+        <span className="font-display text-navy text-[17px] tracking-[0.08em] uppercase flex-1">
           {group.label}
         </span>
         <span
-          className={`text-right tabular-nums font-display text-[15px] w-32 flex-shrink-0 ${
+          className={`text-right tabular-nums font-display text-[17px] w-32 flex-shrink-0 ${
             group.total < 0 ? 'text-status-red' : 'text-navy'
           }`}
         >
@@ -336,6 +381,7 @@ function TopGroup({ group, editing, setEditing, readOnly, onSaveAmount, editable
             onSaveAmount={onSaveAmount}
             editableSeq={editableSeq}
             onShowLineHistory={onShowLineHistory}
+            hideLineHistory={hideLineHistory}
           />
         ))
       )}
@@ -350,6 +396,12 @@ function BudgetDetailZone({
   onUndo,
   undoAvailable,
   onShowLineHistory,
+  // When true, suppress the per-line clock-icon affordance on every
+  // leaf row. Used for locked scenarios — the activity feed remains
+  // the comprehensive surface for locked-state audit history; per-
+  // line drilldown is editing-mode functionality. Architecture §9.1
+  // (extended in v3.6).
+  hideLineHistory = false,
 }) {
   const [editing, setEditing] = useState({ accountId: null })
 
@@ -390,6 +442,7 @@ function BudgetDetailZone({
         onSaveAmount={onSaveAmount}
         editableSeq={editableSeq}
         onShowLineHistory={onShowLineHistory}
+        hideLineHistory={hideLineHistory}
       />
       <TopGroup
         group={tree.expense}
@@ -399,6 +452,7 @@ function BudgetDetailZone({
         onSaveAmount={onSaveAmount}
         editableSeq={editableSeq}
         onShowLineHistory={onShowLineHistory}
+        hideLineHistory={hideLineHistory}
       />
 
       {readOnly && (

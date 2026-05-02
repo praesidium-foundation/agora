@@ -67,7 +67,7 @@ export function validateScenarioForLock(scenario, lines, lockedSibling = null) {
       kind: 'sibling_locked',
       hardBlock: true,
       message:
-        `Scenario "${lockedSibling.scenario_label}" in this (AYE, stage) is currently locked. ` +
+        `"${lockedSibling.scenario_label}" in this (AYE, stage) is currently locked. ` +
         `Unlock it before submitting "${scenario.scenario_label}" for review.`,
     })
   }

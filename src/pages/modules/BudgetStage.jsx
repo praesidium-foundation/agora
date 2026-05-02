@@ -39,7 +39,7 @@ import SubmitLockModal from '../../components/budget/SubmitLockModal'
 import ApproveLockBar from '../../components/budget/ApproveLockBar'
 import LockedBanner from '../../components/budget/LockedBanner'
 import LineHistoryModal from '../../components/budget/LineHistoryModal'
-import ActivityFeedPanel from '../../components/budget/ActivityFeedPanel'
+import ActivityFeedModal from '../../components/budget/ActivityFeedModal'
 import RequestUnlockModal from '../../components/budget/RequestUnlockModal'
 import ApproveUnlockModal from '../../components/budget/ApproveUnlockModal'
 import RejectUnlockModal from '../../components/budget/RejectUnlockModal'
@@ -108,6 +108,7 @@ function HeaderZone({
   onSaveClick,
   onViewPdfClick,
   onSubmitLockClick,
+  onOpenActivityFeed,
   resetting,
   canEdit,
   canSubmitLock,
@@ -170,7 +171,7 @@ function HeaderZone({
       : scenarioForActions.state !== 'drafting'
         ? `Scenario is ${scenarioForActions.state}; submit not available in this state.`
         : lockedSibling
-          ? `Scenario "${lockedSibling.scenario_label}" is currently locked in this (AYE, stage). Unlock it before submitting this scenario for lock review.`
+          ? `"${lockedSibling.scenario_label}" is currently locked in this (AYE, stage). Unlock it before submitting this scenario for lock review.`
           : !scenarioForActions.is_recommended
             ? 'This scenario must be marked as recommended before it can be locked. Use the scenario tab menu (⋮) to mark it.'
             : 'Submit for lock review.'
@@ -290,7 +291,7 @@ function HeaderZone({
       )}
 
       {scenarios.length > 0 && (
-        <div className="mt-3 -mb-3 border-b-[0.5px] border-card-border">
+        <div className="mt-3 -mb-3 border-b-[0.5px] border-card-border flex items-end justify-between gap-4">
           <ScenarioTabs
             scenarios={scenarios}
             activeId={activeScenarioId}
@@ -299,6 +300,20 @@ function HeaderZone({
             onAction={onScenarioAction}
             canEdit={canEdit}
           />
+          {/* Recent Activity affordance (v3.6 relocation): right-
+              aligned text link on the scenario tabs row, baseline-
+              aligned with tab labels. Click opens ActivityFeedModal.
+              Only rendered when an active scenario exists — the modal
+              operates on the active scenario. */}
+          {scenarioForActions && (
+            <button
+              type="button"
+              onClick={onOpenActivityFeed}
+              className="px-3 py-1.5 font-body text-[13px] text-status-blue hover:underline whitespace-nowrap flex-shrink-0"
+            >
+              Recent Activity
+            </button>
+          )}
         </div>
       )}
     </header>
@@ -378,6 +393,11 @@ function BudgetStage() {
   // Per-line audit history modal. Holds {lineId, accountCode,
   // accountName} when open; null when closed.
   const [lineHistoryFor, setLineHistoryFor] = useState(null)
+
+  // Activity feed modal. Boolean — opens against the active scenario.
+  // v3.6: replaced the cream-highlight inline banner with a "Recent
+  // Activity" link in the scenario tabs row that opens this modal.
+  const [activityFeedOpen, setActivityFeedOpen] = useState(false)
 
   // Unlock workflow modals. Single string controls which (if any) is
   // open: 'request' | 'approve' | 'reject' | 'withdraw' | null. Only
@@ -1095,6 +1115,7 @@ function BudgetStage() {
               }
             }}
             onSubmitLockClick={() => setSubmitLockOpen(true)}
+            onOpenActivityFeed={() => setActivityFeedOpen(true)}
             resetting={resetting}
             canEdit={canEdit && canEditCoa}
             canSubmitLock={canSubmitLock || canPbAdmin}
@@ -1205,7 +1226,6 @@ function BudgetStage() {
                       Sibling scenario is locked
                     </p>
                     <p className="text-body">
-                      Scenario{' '}
                       <strong className="font-medium">
                         {lockedSibling.scenario_label}
                       </strong>{' '}
@@ -1227,11 +1247,6 @@ function BudgetStage() {
                   />
                 )}
 
-                <ActivityFeedPanel
-                  scenarioId={activeScenario.id}
-                  accountsById={accountsById}
-                />
-
                 <BudgetDetailZone
                   tree={tree}
                   readOnly={readOnly}
@@ -1240,6 +1255,7 @@ function BudgetStage() {
                   }
                   onUndo={handleUndo}
                   undoAvailable={undoStack.length > 0}
+                  hideLineHistory={activeScenario.state === 'locked'}
                   onShowLineHistory={(line, account) =>
                     setLineHistoryFor({
                       lineId: line.id,
@@ -1314,6 +1330,17 @@ function BudgetStage() {
           accountCode={lineHistoryFor.accountCode}
           accountName={lineHistoryFor.accountName}
           onClose={() => setLineHistoryFor(null)}
+        />
+      )}
+
+      {/* Activity feed modal (v3.6 relocation). Opens from the
+          "Recent Activity" link in the scenario tabs row. Operates
+          on the active scenario. */}
+      {activityFeedOpen && activeScenario && (
+        <ActivityFeedModal
+          scenarioId={activeScenario.id}
+          accountsById={accountsById}
+          onClose={() => setActivityFeedOpen(false)}
         />
       )}
 

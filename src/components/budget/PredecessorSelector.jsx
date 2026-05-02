@@ -224,24 +224,29 @@ function PredecessorCard({ snapshot, predecessorStage, ayeLabel, lockerName, onS
         Working name: <strong className="font-medium">{snapshot.scenario_label || '—'}</strong>
         {lockerName ? <> · Approved by <strong className="font-medium">{lockerName}</strong></> : null}
       </p>
-      <div className="grid grid-cols-3 gap-x-6 gap-y-1 text-[12px]">
-        <KpiRow label="Income" value={snapshot.kpi_total_income} />
-        <KpiRow label="Expenses" value={snapshot.kpi_total_expenses} />
-        <KpiRow label="Net" value={snapshot.kpi_net_income} accentNegative />
+      {/* Three KPI pairs in a single horizontal row. Each label-amount
+          pair reads as a connected unit (no justify-between within the
+          pair); pairs are separated by a middot-spaced gap. Mirrors
+          the §10.4 principle "name and amount read as connected
+          units, not opposite ends of the page". */}
+      <div className="flex items-baseline gap-x-5 gap-y-1 flex-wrap text-[12px]">
+        <KpiPair label="Income" value={snapshot.kpi_total_income} />
+        <KpiPair label="Expenses" value={snapshot.kpi_total_expenses} />
+        <KpiPair label="Net" value={snapshot.kpi_net_income} accentNegative />
       </div>
     </button>
   )
 }
 
-function KpiRow({ label, value, accentNegative = false }) {
+function KpiPair({ label, value, accentNegative = false }) {
   const numeric = Number(value)
   const isNegative = accentNegative && numeric < 0
   return (
-    <div className="flex justify-between gap-2">
+    <span className="inline-flex items-baseline gap-1.5">
       <span className="font-body text-muted">{label}</span>
-      <span className={`font-body tabular-nums ${isNegative ? 'text-status-red' : 'text-navy'}`}>
+      <span className={`font-body tabular-nums font-medium ${isNegative ? 'text-status-red' : 'text-navy'}`}>
         {fmtUsd(value)}
       </span>
-    </div>
+    </span>
   )
 }
