@@ -1,6 +1,6 @@
 # Agora by Praesidium — Architecture Design Document
 
-**Version 3.7.1** — May 2, 2026 — Module-scoped governance authority codification (follow-up to v3.7). Full version history at the end of this document.
+**Version 3.8** — May 2, 2026 — Tuition module refined to two-stage design (architectural keystone before any code or schema work begins on Tuition). Full version history at the end of this document.
 
 ---
 
@@ -135,11 +135,10 @@ GOVERNANCE LAYER
                 
 PLANNING LAYER (per-AYE)
   Enrollment Estimator
-  Tuition Worksheet
+  Tuition Worksheet (Stage 1: Planning, January — Stage 2: Audit, September with family detail)
   Staffing
   Preliminary Budget (integrates above)
-  Enrollment Audit (October — family-level reality)
-  Final Budget (integrates Audit + revised plans)
+  Final Budget (integrates Tuition Audit + revised plans)
                 ↓ measured against
 
 ACTUALS LAYER (continuous, ongoing)
@@ -175,10 +174,12 @@ DEVELOPMENT
 PLANNING
   1. Enrollment Estimator
   2. Tuition
+       ├─ Tuition Planning   (Stage 1)
+       └─ Tuition Audit      (Stage 2 — family detail)
   3. Staffing
-  4. Preliminary Budget
-  5. Enrollment Audit
-  6. Final Budget
+  4. Budget
+       ├─ Preliminary Budget
+       └─ Final Budget
 
 ACTUALS
   Advancement
@@ -204,11 +205,11 @@ ADMIN
 | Strategic ENDS Priorities | Multi-year (currently 1, target 3+) | Board-adopted, periodically renewed |
 | Operational Strategic Plan | Single AYE | HoS-submitted, Board-adopted, May/July |
 | Enrollment Estimator | Single AYE | Multiple scenarios; locked once recommended |
-| Tuition Worksheet | Single AYE | Locked once per AYE (typically January) |
+| Tuition Stage 1 (Planning) | Single AYE | Locked once per AYE (typically January) |
+| Tuition Stage 2 (Audit) | Single AYE | Locked once per AYE (typically September, after enrollment finalizes) |
 | Staffing | Single AYE | Locked once per AYE (typically late summer) |
 | Preliminary Budget | Single AYE | Locked April |
-| Final Budget | Single AYE | Locked October (after Enrollment Audit) |
-| Enrollment Audit | Single AYE | Conducted October |
+| Final Budget | Single AYE | Locked October (after Tuition Stage 2) |
 | Advancement | Continuous | Monthly updates, year-round |
 | Board Composition | Single AYE, with carryforward | Live editing; snapshotted at AYE close |
 | Committees | Multi-year (committees) + per-AYE (memberships) | Live editing; snapshotted at AYE close |
@@ -250,13 +251,15 @@ Lock and unlock workflows are governance-weight: they record who approved an art
 
 Data flows downstream only:
 
-- Enrollment Estimator → Tuition Worksheet (per-grade counts × rates = revenue)
+- Advancement → Enrollment Estimator (continuous monthly headcount as starting point for projections)
+- Enrollment Estimator → Tuition Stage 1 (per-grade counts inform the projected family distribution)
 - Enrollment Estimator → Budget (student count for cost-per-student calculations)
-- Tuition Worksheet → Budget (revenue values for tuition/fee accounts)
+- Tuition Stage 1 (Tuition Planning, locked) → Preliminary Budget (revenue projections from locked planning rates)
+- Tuition Stage 2 (Tuition Audit, locked) → Final Budget (per-family actuals replace projection)
 - Staffing → Budget (compensation totals for personnel accounts)
-- Enrollment Audit → Final Budget (actual reality replaces projection)
-- Advancement → Enrollment Estimator (actuals as starting point for projections)
 - Strategic Plan → all modules (target comparisons in KPIs)
+
+Tuition is a two-stage module per §7.3; the per-family enrollment audit that was previously framed as a separate "Enrollment Audit" module is Tuition Stage 2. Cross-module lock cascade rules — which upstream lock states are required to lock each downstream module — are formalized in §7.5.
 
 Budget is read-only for upstream-fed values. To change them, edit the upstream source.
 
@@ -571,7 +574,7 @@ In code: `BudgetStage.jsx` forks its data fetch on `activeScenario.state`. Locke
 
 **Detail-visibility flags** (orthogonal to module permissions per Section 2.1):
 - `can_view_staff_compensation` — see individual staff salary lines
-- `can_view_family_details` — see individual family rows in Enrollment Audit
+- `can_view_family_details` — see individual family rows in Tuition Stage 2 (audit) detail
 - `can_view_donor_details` — see individual donor amounts in Fundraising (future)
 
 **Rendering**: Same snapshot serves all viewers. Permissions checked at render time. Aggregate totals always visible to anyone with `view` permission; line-item detail filtered by detail-visibility flags.
@@ -615,9 +618,11 @@ Budget module:
   - "variance_report" (comparison view)
 
 Tuition Worksheet:
-  - "tuition_schedule_public" (family-facing, branded)
+  - "tuition_schedule_public" (family-facing, branded — Stage 1 lock artifact)
   - "scenario_comparison" (board view)
-  - "tuition_recommendation" (committee report)
+  - "tuition_recommendation" (committee report — Stage 1)
+  - "audit_summary_by_tier" (Stage 2 — aggregated tier counts and discount totals)
+  - "audit_family_detail" (Stage 2 — per-family detail with redaction)
 
 Staffing:
   - "comp_summary" (aggregate)
@@ -627,10 +632,6 @@ Staffing:
 Strategic Plan:
   - "adopted_document"
   - "tracking_report"
-
-Enrollment Audit:
-  - "summary_by_grade"
-  - "family_detail" (with redaction)
 ```
 
 User picks view at PDF generation time. View picker shows only views their permission allows.
@@ -925,65 +926,177 @@ enrollment_estimate_sections (for combo class handling)
 
 ### 7.3 Tuition Worksheet
 
-**Purpose**: Tuition revenue scenarios for an AYE, plus family-facing Tuition Schedule.
+Two-stage module per §3.8. Real-data design discovery during the AYE 2026 Final Budget exercise surfaced that tuition is fundamentally a two-stage governance cycle, not a single-stage projection. What was previously queued as a separate "Enrollment Audit" module is actually Tuition Stage 2 — the per-family detail capture after September enrollment finalizes. This section is the architectural keystone for the Tuition module before any schema or code work begins.
 
-**Inputs**: Enrollment estimate (per-grade counts), per-grade rates, sibling discount logic, fees.
+#### Purpose
 
-**Outputs**: Revenue values feeding Budget; family-facing Tuition Schedule PDF.
+**Stage 1 — Tuition Planning** (locks January). Sets tuition rates, fees, and discount budgets for the upcoming AYE. Tuition Committee reviews proposed tier rates against the locked Strategic Financial Plan and prior-year actuals; Committee recommends to Board; Board approves; Stage 1 locks. The locked Stage 1 snapshot becomes upstream input to Preliminary Budget revenue projections (per §7.5 cascade rules) and is the source from which the family-facing Tuition Schedule PDF is generated.
 
-**Schema** (built on existing `tuition_worksheet`, `tuition_scenarios`, with extensions):
+**Stage 2 — Tuition Audit** (locks September, after enrollment is finalized). Captures per-family enrollment, applied tier per family, and actual discount allocations (Faculty awards, Other-discount awards, Financial Aid awards). The locked Stage 2 snapshot becomes upstream input to Final Budget actuals (per §7.5) and is the official "what tuition revenue did the school actually book this AYE" record.
+
+#### Workflow stages
+
+Tuition workflow seed (one workflow per school per §3.8):
+
+| display_name | stage_type | is_terminal | target_month |
+|---|---|---|---|
+| Tuition Planning | preliminary | false | January |
+| Tuition Audit | final | true | September |
+
+**Stage type judgment.** Reusing `preliminary` and `final` from the existing `stage_type_definitions` catalog rather than introducing new `planning` / `audit` types. Semantics fit cleanly: `preliminary` is "draft that has been governance-approved and locks for downstream consumption"; `final` is "actuals captured, terminal for the AYE." The school's display name carries the module-specific vocabulary ("Tuition Planning" vs "Preliminary Budget"); the stage type drives generic machinery (cross-module joins, terminal-stage selection for KPI capture). Catalog stays small; cross-module cascade phrasing reads cleanly ("each module's terminal stage is upstream of the next downstream module's terminal stage"). If a future school's tuition workflow needs additional intermediate stages (e.g., a "Tuition Reforecast" mid-year), the existing `reforecast` type already in the catalog covers it.
+
+#### Schema
+
+`tuition_worksheet_scenarios` — per-stage, per-AYE, multi-scenario (one `is_recommended` per stage at lock time per the §7.1 pattern). Mirrors `budget_stage_scenarios` for the standard scenario / lock / unlock fields:
 
 ```
-tuition_worksheet
-  ...existing fields...
-  enrollment_estimate_id uuid (FK; which Enrollment scenario feeds this)
+tuition_worksheet_scenarios
+  -- Standard scenario fields (parallel budget_stage_scenarios)
+  id                              uuid pk
+  aye_id                          uuid FK
+  stage_id                        uuid FK to module_workflow_stages
+  scenario_label                  text
+  description                     text
+  is_recommended                  boolean
+  state                           enum (drafting | pending_lock_review | locked | pending_unlock_review)
+  locked_at                       timestamptz
+  locked_by                       uuid FK to auth.users
+  locked_via                      text ('normal' | 'override')
+  override_justification          text
+  unlock_*                        -- mirror budget_stage_scenarios per §8.13 two-identity model
+  created_*, updated_*            audit fields
 
-tuition_scenarios
-  ...existing fields...
-  
-  sibling_discount_model enum ('flat_tiers', 'percentage_off')
-  
-  -- For 'flat_tiers' model (Libertas current):
-  tuition_1_student numeric
-  tuition_2_student numeric
-  tuition_3_student numeric
-  tuition_4plus_student numeric
-  
-  -- For 'percentage_off' model (Libertas previously):
-  base_tuition numeric
-  second_student_discount_pct numeric
-  third_student_discount_pct numeric
-  fourth_student_discount_pct numeric
-  
-  -- High school options (Libertas-specific structure):
-  hs_full_time_annual numeric
-  hs_3day_hybrid_annual numeric
-  hs_2day_hybrid_annual numeric
-  hs_alacarte_core_annual numeric
-  hs_alacarte_elective_annual numeric
-  hs_enrichment_day_annual numeric
-  
-  -- Fees:
-  enrollment_fee_early numeric
-  enrollment_fee_late numeric
-  curriculum_fee_per_student numeric
-  curriculum_fee_admin_fee_monthly numeric
-  before_after_school_hourly numeric
-  volunteer_buyout_fee numeric
-  unfulfilled_volunteer_assessment numeric
-  
-  -- Customization escape hatch:
-  custom_pricing_structure jsonb
+  -- Configuration: rates and fees (set in Stage 1, immutable in Stage 2 — see "Stage 2 immutability")
+  tier_count                      int                 -- 1 to N (Libertas: 4)
+  tier_rates                      jsonb               -- [{tier_size, per_student_rate, applies_when_n_students}, …]
+  faculty_discount_pct            numeric             -- default 50.00 (Libertas current)
+  other_discount_envelope         numeric             -- board-granted envelope for ad-hoc awards
+  financial_aid_envelope          numeric             -- FA committee-managed envelope
+  curriculum_fee_per_student      numeric
+  enrollment_fee_per_student      numeric
+  before_after_school_hourly_rate numeric
+
+  -- Stage-1-only fields (projection inputs; not present on Stage 2 scenarios)
+  estimated_family_distribution   jsonb               -- [{tier_size, family_count}, …]
+
+  -- Stage-2-only fields (actuals; not populated on Stage 1 scenarios)
+  actual_before_after_school_hours numeric            -- from operational data
+
+  -- Optional cross-module linkage (manual entry today; FK-resolvable when Enrollment Estimator ships)
+  linked_enrollment_estimate_id   uuid (nullable FK)
 ```
 
-**Design choices**:
-- Customizable pricing structure per school (some have flat, some have percentage)
-- Customizable PDF template per school (Praesidium configures during onboarding)
-- Generates family-facing Tuition Schedule PDF on lock (eliminates HoS manual production hours)
-- Once-per-year artifact — no mid-year changes
-- Feeds Budget Tuition Revenue category via Module Mappings (Section 9.3)
+`tuition_worksheet_family_details` — Stage 2 only; one row per enrolled family per scenario. Family detail is the operational substance of the Stage 2 audit.
 
-**Tuition Schedule PDF**: The family-facing document. Sections include tuition table (TK-8 with sibling discount tiers), high school options (if applicable), enrollment & curriculum fees, payment options, program fees, withdrawal policy, family volunteer hours policy, school contact info. Per-school template configured during onboarding.
+```
+tuition_worksheet_family_details
+  id                       uuid pk
+  scenario_id              uuid FK to tuition_worksheet_scenarios
+  family_label             text                   -- redaction-aware (see §5.2)
+  students_enrolled        int
+
+  -- Auto-derived from students_enrolled; tier_rate snapshotted from scenario.tier_rates at audit row creation
+  applied_tier_size        int
+  applied_tier_rate        numeric
+
+  -- Per-family discount allocations (nullable — only populated when discount applies to this family)
+  faculty_discount_amount  numeric                 -- null if family is not faculty
+  other_discount_amount    numeric                 -- null if no Other-discount award
+  financial_aid_amount     numeric                 -- null if no FA award
+
+  -- Governance annotations — board / FA committee decisions, special circumstances
+  notes                    text                    -- non-optional; carries the audit trail
+
+  created_*, updated_*     audit fields
+```
+
+**Snapshot tables** parallel Budget per the §5.1 captured-by-value pattern:
+
+- `tuition_worksheet_snapshots` — captures scenario configuration (tier rates, fees, envelopes) plus computed totals (gross tuition revenue, discount aggregates, net revenue, KPIs) at lock time. Captured-by-value columns include the AYE label, stage display name and type, school name (for PDF letterhead), and the full configuration jsonb so Stage 1 snapshots remain renderable even if the live `tuition_worksheet_scenarios` row is later edited (drafting clone) or hard-deleted.
+- `tuition_worksheet_snapshot_family_details` — Stage 2 only. Captures per-family rows by value: family_label, students_enrolled, applied tier size and rate, every discount amount, the notes text. Locked Stage 2 snapshots are the audit record; they cannot drift if a family later changes circumstances.
+
+`ON DELETE SET NULL` on `aye_id` and `stage_id` from snapshot rows preserves historical snapshots if upstream schema changes occur. Same pattern as `budget_snapshots` per §5.1.
+
+#### Layered discount taxonomy
+
+Discounts are LAYERED, not a single-model selection. A family receives the multi-student tier rate as the primary discount; on top of that, zero or more of three additional discount mechanisms may apply independently:
+
+1. **Multi-student tier (primary, configurable)** — per-student rate decreases as family enrollment increases. Tier 1 (1 student), Tier 2 (2 students), Tier 3 (3 students), Tier 4+ (4 or more students). Configured in `tier_rates` jsonb on the Stage 1 scenario; applies automatically by family size at audit time.
+
+2. **Faculty discount (rule)** — fixed percentage off gross tuition for qualifying faculty children. Default 50% at Libertas. The percentage rule is configured at Stage 1 (`faculty_discount_pct`) and is immutable in Stage 2; the per-family ALLOCATION (`faculty_discount_amount` on each family detail row) is computed in Stage 2 by applying the locked rule to the family's gross tuition.
+
+3. **Other discount (envelope)** — board-granted budget envelope for ad-hoc awards (legacy commitments, special circumstances). Total envelope size set at Stage 1 (`other_discount_envelope`); per-family awards allocated in Stage 2 with a board-decision annotation in the `notes` column (e.g., "$500 awarded by board on 6/2/25").
+
+4. **Financial Aid (committee-managed envelope)** — FA committee reviews applications semi-annually and allocates from a committee-managed envelope. Total envelope set at Stage 1 (`financial_aid_envelope`); per-family awards allocated in Stage 2 with an FA-committee annotation in `notes` (e.g., "20% per Financial Aid Committee 6/2/25").
+
+The `notes` column is non-optional governance context — it carries the audit trail of who decided what and when. A non-empty content rule (parallel to the unlock workflow's justification field per §8.13) is enforced at the application validator layer for any family row where any discount amount is non-null.
+
+#### Computed outputs
+
+Two parallel presentations of the same underlying data — different audiences need different framings.
+
+**Family-facing view** — the per-family per-student rate that goes on a tuition agreement:
+
+```
+per_student_rate(family) =
+  applied_tier_rate
+    - (faculty_discount_amount / students_enrolled or 0)
+    - (other_discount_amount / students_enrolled or 0)
+    - (financial_aid_amount / students_enrolled or 0)
+```
+
+This is the single number on a family's signed tuition agreement.
+
+**Accounting view** — rolls up to Budget revenue accounts via §7.6 (Module-to-Budget mapping):
+
+- Gross tuition revenue = Σ (full-rate × students_enrolled) computed at the Tier 1 (single-student) rate
+- Multi-student discount aggregate = Gross − Σ (applied_tier_rate × students_enrolled)
+- Faculty discount total = Σ faculty_discount_amount (Stage 2 actuals; projected from `faculty_discount_pct` × estimated faculty count in Stage 1)
+- Other discount total = Σ other_discount_amount (Stage 2 actuals; equals envelope size in Stage 1 projection)
+- Financial Aid total = Σ financial_aid_amount (Stage 2 actuals; equals envelope size in Stage 1 projection)
+- Net tuition revenue = Gross − every discount total
+- Plus fee revenue: curriculum_fee_per_student × students_enrolled, enrollment_fee_per_student × students_enrolled, before_after_school_hourly_rate × actual_before_after_school_hours (Stage 2) or projected hours (Stage 1)
+
+Each line maps to a specific Budget revenue account per §7.6. Discount totals map to contra-revenue accounts so the Budget shows gross-vs-net cleanly.
+
+**KPIs**:
+
+- **Net education program ratio** — net tuition revenue / Budget expense projection. Tracks how much of operations the families fund vs. how much depends on contributions and other revenue. Same framing as Budget's existing `kpi_ed_program_ratio`; tuition feeds the numerator.
+- **Break-even enrollment count** (Stage 1 forward computation) — given proposed tier rates, projected discount envelopes, and the locked Budget's expense projection, the system solves for the enrollment count required to break even. Directly informs Tuition Committee's tier-rate recommendation to the Board: "if we adopt these rates, we need N students to break even; current pre-enrollment is M." The math is a deterministic forward solve given the family-distribution projection (`estimated_family_distribution`) — no optimization, no search.
+- **Year-over-year comparison** — prior locked Tuition Worksheet snapshot rendered alongside the current scenario for side-by-side comparison. Particularly useful at Stage 1 (this year's proposed rates vs. last year's locked rates) and at Stage 2 (this year's actuals vs. last year's actuals).
+
+#### Stage 2 immutability rules
+
+When a Stage 2 (Tuition Audit) scenario seeds from a locked Stage 1 (Tuition Planning) snapshot — via a `create_tuition_audit_from_planning_snapshot` RPC parallel to Migration 019's `create_scenario_from_snapshot` for Final Budget — the following fields copy in but are immutable in Stage 2 because families have signed tuition agreements at these rates:
+
+- `tier_count`
+- `tier_rates`
+- `faculty_discount_pct` (the rule; per-family allocation is editable)
+- `curriculum_fee_per_student`
+- `enrollment_fee_per_student`
+- `before_after_school_hourly_rate`
+
+Stage 2-editable fields:
+
+- Per-family detail rows (the entire `tuition_worksheet_family_details` table — that's the audit, and it only exists in Stage 2).
+- `faculty_discount_amount`, `other_discount_amount`, `financial_aid_amount` per family (the rule % is fixed; specific awards happen per family).
+- `other_discount_envelope`, `financial_aid_envelope` — rare. Board may add to envelope mid-cycle if circumstances warrant, but the routine case is that the Stage 1 envelope holds. Edits leave a change_log audit trail.
+- `actual_before_after_school_hours` — operational data captured at audit time only.
+- `notes` (per family) — governance annotations carry through audit and are editable as the FA committee and board record decisions through the year.
+
+Schema enforces immutability via a `BEFORE UPDATE` trigger (`tg_tuition_stage_2_immutability`) that rejects UPDATEs to Stage-1-locked fields when the row's `stage_id` resolves to the audit (`final`-typed) stage. Three-layer enforcement per CLAUDE.md "Three-layer enforcement for state invariants": trigger as hard guard, application validator (`src/lib/tuitionWorksheet.js`) for pre-flight checks, UI affordance to disable Stage-1-locked fields in Stage 2 scenarios.
+
+#### Tuition Schedule PDF
+
+Family-facing artifact generated from the Stage 1 locked snapshot. Content configured by the Tuition Committee at Stage 1 lock — not just tier rates, but also fee amounts (Curriculum Fee, Enrollment Fee per student) and the B&A School Care hourly rate are committee decisions baked into the snapshot. Per-school template configured during onboarding (some schools have HS structures; some don't; some have volunteer-hours clauses; some don't — template handles the variation).
+
+The Tuition Schedule is once-per-AYE, generated at Stage 1 lock, and distributed to families with their tuition agreements. Stage 2 does not regenerate the schedule (rates do not change post-Stage-1-lock); Stage 2 only captures who actually enrolled at those rates. Print-route pattern follows §5.3: `/print/tuition/:scenarioId/schedule` mounts the family-facing template tree and auto-fires `window.print()` on mount.
+
+#### Module-scoped governance authority (per §3.5)
+
+The Tuition module's canonical authority pattern: the **Tuition Committee chair** (typically the Treasurer or HoS, depending on the school's committee structure) submits Stage 1 for review; the **Treasurer (or designee)** approves the Stage 1 lock. The same authority applies to Stage 2 — Treasurer or designee approves the audit lock, after HoS or Office Manager has captured the per-family detail. The Financial Aid Committee operates outside system-level authority; its decisions appear as per-family annotations in Stage 2 family detail rows (the `notes` column captures "20% per Financial Aid Committee 6/2/25" as the audit signature).
+
+Module-scoped per §3.5: the system enforces only the permission grant (`approve_lock` / `approve_unlock` on the Tuition module) and the distinct-identity constraint between requester and approval_2. The procedural mapping of which user holds the named role — Tuition Committee chair, Treasurer, Board Chair as designee fallback — is school-level configuration, not a system rule. User-facing copy in unlock modals will name "Treasurer (or designee)" parallel to the Budget module's pattern (per §8.13).
 
 ### 7.4 Staffing
 
@@ -1026,12 +1139,35 @@ staffing_scenario_positions
 
 **Lock timing**: Staffing typically isn't locked until late summer (August/September), AFTER Preliminary Budget. Preliminary Budget locks with Staffing in projection state. Final Budget requires locked Staffing.
 
-### 7.5 Module-to-Budget mapping
+### 7.5 Cross-module lock cascade rules
+
+Lock cascade rules formalize which upstream module locks are required before each downstream module can lock. The mechanism is `school_lock_cascade_rules` (per §3.4); this section is the canonical statement of which rules apply between which modules. Each module's section can reference §7.5 rather than restating the cascade locally.
+
+**Cascade table** (Libertas's seed configuration; other schools' configurations may vary on stage timing but follow the same upstream → downstream shape):
+
+| Downstream lock | Upstream prerequisites | Notes |
+|---|---|---|
+| Tuition Stage 1 (Planning) | Strategic Financial Plan adopted | Warning only, not blocking — Tuition can lock without an adopted plan if circumstances warrant; the override path captures the justification |
+| Preliminary Budget | Tuition Stage 1 locked; Enrollment Estimator locked | Staffing is the documented §3.4 exception (allowed in projection state at non-terminal stages) |
+| Tuition Stage 2 (Audit) | Tuition Stage 1 locked (same AYE) | Stage-initialization cascade per §3.4: Stage 2 cannot be set up until Stage 1 is locked, since Stage 2 seeds from the Stage 1 snapshot |
+| Final Budget | Preliminary Budget locked (same AYE); Tuition Stage 2 locked; Staffing locked | Per Libertas's seeded rules; downstream consumers like Strategic Plan target comparisons read from the locked Final Budget snapshot |
+
+**Override paths exist** for every cascade rule. The current Libertas state (May 2026) has Preliminary Budget locked with override because Tuition / Enrollment Estimator / Staffing modules have not shipped yet — there is nothing upstream to lock. Override usage is captured in the scenario's `override_justification` field and surfaced in the Operating Budget Detail PDF and the activity feed (see §8.13's locked banner pattern). The intent is that override is the realistic day-one path until upstream modules ship; once they ship, the cascade rules become routinely satisfied and override usage decreases to genuine exceptions.
+
+**Cascade enforcement runs at submit-for-lock time** against `school_lock_cascade_rules`, not at draft time. A user can build a Final Budget scenario freely while Tuition Stage 2 is still in drafting; the cascade gate fires only when the user submits the Final Budget scenario for approval. Submit-time validation aggregates cascade gates with module-specific gates (recommended-flag, non-zero amounts, etc.) into a single hardBlock vs. override decision (see §8.9 for the Budget module's submit-time validation pattern; future modules follow the same pattern).
+
+**Granularity** today is module-scoped: cascade rules reference module codes, not stage IDs (per §3.4 — "Granularity"). The whole Tuition module shares one set of upstream requirements; the Stage 1 / Stage 2 distinctions in the table above are downstream framings ("Tuition Stage 1 lock has X upstream requirements, Tuition Stage 2 lock has Y") rather than per-stage cascade rule rows. When per-stage variations become a real need, the schema extension lives in `school_lock_cascade_rules` per the §3.4 note.
+
+**Unlock cascade** is not enforced today (per §3.4 and §8.13). When a downstream module references a locked upstream snapshot (e.g., Final Budget references locked Tuition Stage 2 lines), unlocking the upstream snapshot would invalidate the downstream's source-of-truth. The architecture extension point — block upstream unlock when downstream consumers exist, or warn — is described in §3.4. Today, no module has live downstream consumers in the unlock-blocking sense, so the absence of enforcement does not surface as a real risk.
+
+### 7.6 Module-to-Budget mapping
 
 Each upstream module's outputs flow into specific Budget accounts. Mapping configured in **School Settings → Module Configuration**.
 
 Examples:
-- Tuition Worksheet's net tuition → account "Revenue – Tuition"
+- Tuition Stage 1 (Planning) net projected tuition → account "Revenue – Tuition" (feeds Preliminary Budget)
+- Tuition Stage 2 (Audit) net actual tuition → account "Revenue – Tuition" (feeds Final Budget)
+- Tuition discount aggregates (Multi-student / Faculty / Other / Financial Aid) → contra-revenue accounts so Budget shows gross-vs-net cleanly per §7.3
 - Staffing's salary type total → account "Staff Salaries"
 - Staffing's hourly type total → account "Hourly Wages"
 - Staffing's contractor type total → account "Subcontractors"
@@ -1239,7 +1375,7 @@ The lock workflow is **stage-agnostic** — every stage of every workflow uses t
 - Cascade rules for the budget module must be satisfied → error or override
 - Strategic Financial Plan adopted (covers this AYE) → warning only, not blocking
 
-For Libertas's seeded rules: tuition_worksheet locked AND enrollment_estimator locked. Staffing is the documented Section 3.4 exception (allowed projection state at any non-terminal stage); the cascade rules table reflects that by simply not requiring it. When per-stage cascade variations become a real need (e.g., "Final Budget specifically requires locked Staffing while Preliminary is fine with projected"), see Section 3.4's "Granularity" note for the schema extension.
+For Libertas's seeded rules per §7.5: Preliminary Budget requires locked Tuition Stage 1 and locked Enrollment Estimator; Final Budget additionally requires locked Tuition Stage 2 and locked Staffing. Staffing is the documented §3.4 exception at non-terminal stages (allowed in projection state when locking Preliminary Budget); the cascade rules table in §7.5 reflects that by requiring Staffing only at Final Budget. When per-stage cascade variations become a real need (e.g., "Final Budget specifically requires locked Staffing while Preliminary is fine with projected"), see §3.4's "Granularity" note for the schema extension.
 
 If override used: justification text required, recorded in `override_justification` on the scenario row and carried into the snapshot at lock time.
 
@@ -1869,11 +2005,14 @@ A separate Build Sequence document will detail this. Summary here:
 - Module-to-Budget integration (Staffing totals → Budget Personnel category)
 - Snapshot capture with redaction support
 
-### Phase 4: Tuition Worksheet
-- Full edit mode (currently read-only)
-- Multi-scenario support
-- Sibling discount model selection (flat tiers vs. percentage)
-- Family-facing Tuition Schedule PDF generation
+### Phase 4: Tuition Module (two-stage per §7.3)
+- 4a (Tuition-A2 schema): Two-stage workflow setup (Tuition Planning + Tuition Audit) per §3.8; tier rate configuration; layered discount taxonomy (multi-student tiers / Faculty rule / Other envelope / Financial Aid envelope) per §7.3; per-family detail tables for Stage 2; snapshot tables parallel Budget per §5.1; Stage 2 immutability trigger
+- 4b (Tuition-B UI): Stage 1 configuration screens (tiers, fees, discount envelopes, projected family distribution); year-over-year comparison view; Stage 2 per-family detail editor with discount allocation columns and notes column
+- 4c (Tuition-C calculation): family-facing per-student rate computation; accounting-view revenue projection with gross-vs-net rollup; break-even enrollment KPI (Stage 1 forward solve)
+- 4d (Tuition-D lock workflow): Stage 1 lock (cascade enables Preliminary Budget per §7.5); Stage 2 lock (cascade enables Final Budget per §7.5); reuses lock/unlock patterns from Phase 2 (§8.13 two-identity model); Stage 2 setup gateway seeds from locked Stage 1 snapshot via `create_tuition_audit_from_planning_snapshot` parallel to Migration 019
+- 4e (Tuition-E PDF): family-facing Tuition Schedule per-school template, generated at Stage 1 lock; Stage 2 audit summary and family-detail print routes per §5.3
+
+Stage 2 (audit) requires Stage 1 to be locked first (stage-initialization cascade per §3.4); per-family detail entry happens in Stage 2 only.
 
 ### Phase 5: Enrollment Estimator + Advancement
 - Advancement actuals UI (monthly headcount, recruitment funnel)
@@ -1887,10 +2026,10 @@ A separate Build Sequence document will detail this. Summary here:
 - Operational Strategic Plan (three-level hierarchy, status tracking)
 - Strategic KPI Dashboard view
 
-### Phase 7: Final Budget + Enrollment Audit
-- Enrollment Audit UI (family-level reality)
-- Final Budget integrating Audit
-- Variance Report view
+### Phase 7: Final Budget
+- Final Budget integrating locked Tuition Stage 2 actuals (per §7.5 cascade)
+- Variance Report view (locked Final Budget vs locked Preliminary Budget)
+- Note: family-level reality capture lives in Tuition Stage 2 (Phase 4d), not a separate Enrollment Audit module
 
 ### Phase 8: Governance Modules
 - Board & Committees (settings + read-only view)
@@ -1927,7 +2066,7 @@ Each phase delivers usable value while building toward the full vision. Specific
 
 **Office Manager** (Libertas current):
 - Chart of Accounts: edit
-- Enrollment Audit: edit
+- Tuition: edit + can_view_family_details (responsible for Stage 2 family detail capture)
 - Staffing: view + can_view_staff_compensation
 - Budget: view
 - Strategic Plan: view
@@ -1935,8 +2074,7 @@ Each phase delivers usable value while building toward the full vision. Specific
 **Treasurer**:
 - Budget: approve_lock + can_view_staff_compensation + can_view_family_details
 - Staffing: approve_lock + can_view_staff_compensation
-- Tuition: approve_lock
-- Enrollment Audit: view + can_view_family_details
+- Tuition: approve_lock + can_view_family_details (approves Stage 1 and Stage 2 lock)
 - Strategic Plan: view
 
 **HoS**:
@@ -1944,7 +2082,7 @@ Each phase delivers usable value while building toward the full vision. Specific
 - Approve_lock varies by module
 
 **Board members (default)**:
-- View on Budget, Staffing, Enrollment Audit (no detail-visibility flags)
+- View on Budget, Staffing, Tuition (no detail-visibility flags — see aggregate totals only, not per-family detail)
 - Read-only on Strategic Plan and Board & Committees
 
 **System Admin**:
@@ -2012,7 +2150,12 @@ For quick lookup of decisions made during design:
 | Operational Plan structure | Three levels (Plan → Focus Area → Action) | 6.4 |
 | Operational Plan post-adoption | Structure locked; living fields editable | 6.5 |
 | Multi-scenario in operational modules | Yes, all three; one is_recommended at lock | 7.1 |
-| Tuition discount models | Both flat tiers AND percentage off | 7.3 |
+| Tuition module shape | Two-stage workflow: Tuition Planning (Stage 1, January) + Tuition Audit (Stage 2, September with family detail) | 7.3, 7.5 |
+| Tuition discount taxonomy | Layered: multi-student tiers (primary), Faculty rule, Other envelope, Financial Aid envelope | 7.3 |
+| Tuition stage typing | Reuse `preliminary` and `final` from existing catalog; school display name carries module-specific vocabulary | 7.3 |
+| B&A School Care rate | Tuition Committee decision at Stage 1; hours actualized at Stage 2 | 7.3 |
+| Tuition Audit per-family detail | Per-family rows with discount allocations and audit-trail notes column | 7.3 |
+| Cross-module lock cascade | Cascade rules formalized in §7.5; each module's section references §7.5 for canonical definition | 7.5 |
 | Staffing lock timing | After Preliminary Budget; required for Final | 7.4 |
 | Module workflows | Hybrid: school display name × Praesidium-curated stage type | 3.8 |
 | Budget editing model | Direct edit with undo | 8.3 |
@@ -2075,6 +2218,7 @@ Version history:
 - **v3.0** — April 29, 2026 — Budget PDF visual polish. Five issues from the Commit F shake-out fixed in one pass. (1) **Four-tier hierarchy** in budget detail (new §10.4 subsection): Tier 1 categories at Cinzel 16pt with gold underline; Tier 2 summaries at EB Garamond 13pt bold with thin navy rule; Tier 3 summaries at 12pt bold no rule; Tier 4 leaves at 11pt @ ~85% navy, regular weight, code in a 50px left column. Indentation 24px per tier. (2) **Print-preview chrome cleanup**: chrome bar now uses cream-highlight surface so the white document inside reads as a distinct artifact; document title removed from chrome and rendered inside the document letterhead only; "Print again" → "Print"; chrome elements (`.print-preview-chrome`, `.print-preview-back-link`, `.print-preview-print-button`) explicitly hidden in `@media print` so they cannot leak into saved PDFs. (3) **Forced page break eliminated**: removed the over-broad `print-category` (`break-inside: avoid`) wrapper that was pushing INCOME to page 2. Only Tier 2 blocks now carry `break-inside: avoid`; Tier 1 categories and Tier 4 leaves break freely so page 1 fills naturally with title + KPI summary + the start of INCOME. (4) **Full horizontal color logo** (`/public/logo-horizontal-color.png`) on the first page of every Budget PDF surface; subsequent pages use a thin Cinzel running header with title and DRAFT suffix when applicable. The crest (`/public/logo-mark.png`) stays the in-app/favicon asset. (5) **Tightened name-to-amount layout**: per-tier `max-width` (95% / 85% / 75% for Tiers 2/3/4) so account names and amounts read as connected units instead of opposite ends of the page. New §10.4 subsections "Hierarchical visual treatment in budget PDFs" and "Logo treatment in printed governance documents" codify the rules.
 - **v3.1** — April 29, 2026 — Budget PDF second polish pass. Three issues from the v3.0 shake-out plus a density tightening, all in one pass. (1) **Logo aspect ratio** — the wordmark "LIBERTAS ACADEMY" was rendering vertically compressed because the `<img>` carried `h-[64px]` AND `maxWidth: 240px`; with the natural aspect ratio wider than 240/64, the browser forced the height to stay at 64px while clipping width, distorting the wordmark. Fix sets `width: 220px` explicitly with `height: auto` so the browser computes the correct height from the image's intrinsic aspect ratio. The print stylesheet additionally pins `.print-logo { height: auto !important; object-fit: contain; align-self: flex-start }` as a safety net against any parent flex container that might otherwise stretch the image. (2) **Print preview chrome bar** — Back/Print controls now render as a clear sticky UI bar with cream-highlight surface, navy@15% bottom border, and a soft drop shadow, visually distinct from the white document below. Buttons styled in print.css under `.print-preview-chrome` / `.print-preview-back-link` / `.print-preview-print-button` so the `@media print` suppression rule reliably hits the same selectors. Saved PDFs contain zero chrome. (3) **Tier 1 page-break orphan prevention** — every Tier 1 category (INCOME / EXPENSES) is now rendered with its header AND first Tier 2 child block inside a `.print-tier-1-with-first-tier-2` wrapper carrying `break-inside: avoid`. If "EXPENSES" + "Personnel" don't fit on the current page, both move to the next page — stranding the Tier 1 header alone at the bottom of a page is no longer possible. Subsequent Tier 2 siblings render outside the wrapper and break naturally. (4) **Vertical spacing tightened** by ~30% across all tiers: Tier 1 now 18pt/8pt (was 24pt/12pt), Tier 2 12pt/4pt (was 16pt/6pt), Tier 3 6pt/2pt (was 8pt/4pt), Tier 4 1pt/1pt (was 2pt/2pt). Companion elements (KPI cells, state-indicator banner, title block sub-elements) tightened to match. Document feels denser, more like a published financial statement than a draft worksheet. §10.4 updated with the new spacing table and a "Page break orphan prevention" subsection.
 - **v3.7** — May 2, 2026 — Refactor unlock workflow from three-identity to two-identity model. The original H1/H2 design required three distinct identities — a separate `submit_lock`-permissioned requester plus two `approve_unlock` approvers. Bureaucratic overkill for the actual school governance reality where HoS, Treasurer, and Board Chair all hold `approve_unlock` and the requester's submission already represents their professional judgment. The v3.7 model collapses to two identities: the requester's submission counts as approval_1; one additional approver (distinct from the requester, also holding `approve_unlock`) records approval_2 and triggers the state transition to drafting. (1) **Migration 020** drops the CHECK constraint `unlock_initiator_not_approver_1` from `budget_stage_scenarios` so the requester's identity can also satisfy approval_1. Other integrity constraints (`unlock_initiator_not_approver_2`, `unlock_approvers_distinct`, `unlock_sequential_ordering`, `tg_unlock_only_when_locked` trigger) remain. Schema-only; no data affected. (2) **Migration 021** replaces all three SECURITY DEFINER functions. `request_budget_stage_unlock` permission gate changed from `submit_lock` to `approve_unlock` (submitting an unlock request is itself a governance act of approval; the gate matches the approve gate). The request function now atomically populates BOTH request fields AND approval_1 fields from the caller's identity in a single transaction. `approve_budget_stage_unlock` simplified — returns void instead of text, no first/second branching, only ever handles approval_2 + state transition. The "initiator cannot also record approval_2" check now reads more naturally as "requester cannot also record approval_2." `reject_budget_stage_unlock` logic unchanged. (3) **Application validator** (`src/lib/budgetUnlock.js`): `getUnlockBannerState` collapses from three states to two (`locked_no_request`, `locked_awaiting_final_approval` — the intermediate `locked_awaiting_first_approval` is gone). `canRequestUnlock` now takes `hasApproveUnlock` (was `hasSubmitLock`). `canApproveUnlock` removes the `is_first_approver` failure mode. `UNLOCK_REASON_COPY` updated: `is_initiator` copy refreshed to reflect the requester-as-approval_1 reality; `permission_insufficient` references `approve_unlock` specifically. (4) **UI**: `LockedBanner` collapses from three rendered states to two; the redundant "First approved by [requester] on [date]" line that v1 showed for the same identity goes away — replaced with a single inline sentence "Their submission counts as the first approval; one additional approver is required to complete the unlock." `RequestUnlockModal` body copy reframes: "Submitting this unlock request records your approval as the first of two." `ApproveUnlockModal` title simplifies to plain "Approve unlock" (no more first/final branching), copy reframes around the second-approval-completes-the-unlock framing, confirm button reads "Approve and unlock." `RejectUnlockModal` and `WithdrawUnlockModal` copy unchanged (no first/second references existed). (5) **`BudgetStage`** drops the `hasSubmitLock` prop from the LockedBanner call site; `RequestUnlockModal` similarly takes `hasApproveUnlock` instead. (6) **Architecture doc §8.13** rewritten end-to-end to reflect the two-identity model — schema fields, integrity rules (three layers), permission tier, audit trail, application validator, UI layer. Appendix B adds Migrations 020 and 021 to the implemented list and renumbers needed migrations 020-025 to 022-027. Appendix C unlock decision rows updated. **CLAUDE.md** Unlock workflow paragraph rewritten to match. (7) Pre-migration: the previously-pending unlock request on Final Budget Scenario 1 was withdrawn via the v1 UI before this refactor was applied; verified via `SELECT ... WHERE unlock_requested = true` returning zero rows.
+- **v3.8** — May 2, 2026 — Tuition module refined to two-stage design. Architectural keystone update before any Tuition module schema or code work begins; documentation-only commit; no schema, no code. Real-data design discovery during the AYE 2026 Final Budget exercise surfaced that tuition is fundamentally a two-stage governance cycle (Tuition Planning in January feeding Preliminary Budget; Tuition Audit in September feeding Final Budget), with layered discount taxonomy and per-family detail in Stage 2. The previous §7.3 was written before this operational reality was articulated and treated tuition as single-stage with binary "flat tiers vs. percentage off" discount-model selection. (1) **§7.3 rewritten** end-to-end. New structure: Purpose (per-stage), Workflow stages (reuses `preliminary` + `final` stage types from existing catalog rather than introducing new types — judgment call: school display name carries the module-specific vocabulary, catalog stays small, cross-module cascade phrasing reads cleanly), Schema (`tuition_worksheet_scenarios` + `tuition_worksheet_family_details` + parallel snapshot tables per §5.1), Layered discount taxonomy (multi-student tiers as primary; Faculty rule, Other envelope, FA envelope each independently applied), Computed outputs (family-facing per-student rate vs. accounting-view gross-vs-net rollup), Stage 2 immutability rules (tier rates copy from Stage 1 snapshot but lock from edit because families have signed agreements; enforced via three-layer pattern per CLAUDE.md), Tuition Schedule PDF (Stage 1 family-facing artifact, content configured by Tuition Committee at Stage 1 lock), Module-scoped governance authority (Treasurer or designee, parallel to §8.13 Budget pattern). (2) **§3.6 (Cross-module data flow)** updated to remove "Enrollment Audit → Final Budget" as a separate module reference. Cross-module flows now correctly read Tuition Stage 1 → Preliminary Budget and Tuition Stage 2 → Final Budget. (3) **New §7.5 "Cross-module lock cascade rules"** formalizes which upstream module locks gate which downstream module locks. Cascade table covers Tuition Stage 1, Preliminary Budget, Tuition Stage 2, Final Budget; documents override paths; documents that cascade enforcement fires at submit-for-lock time, not at draft time. Existing §7.5 (Module-to-Budget mapping) renumbered to §7.6. (4) **§3.1, §3.2, §3.3, §5.2, §5.3, §8.9, §12 Phase 7, Appendix A** all updated to remove Enrollment Audit as a separate module: §3.1 three-layer architecture diagram drops the standalone "Enrollment Audit" line; §3.2 sidebar replaces flat list with two-stage Tuition tree (Tuition Planning + Tuition Audit) and same for Budget; §3.3 time-scoping table replaces "Tuition Worksheet" + "Enrollment Audit" rows with "Tuition Stage 1 (Planning)" + "Tuition Stage 2 (Audit)"; §5.2 detail-visibility flag description updated; §5.3 PDF view list folds the audit views into Tuition module; §8.9 cascade narrative updated to reference §7.5 explicitly; Appendix A permission profiles drop Enrollment Audit references and roll the family-detail role into Tuition. (5) **§12 Phase 4** rewritten as five sub-phases (4a schema → 4b UI → 4c calculation → 4d lock workflow → 4e PDF) reflecting the two-stage shape; §12 Phase 7 trimmed to Final Budget integration since family-level reality capture moved into Phase 4d. (6) **Appendix C** decision rows: NEW "Tuition module shape" (two-stage), REPLACED "Tuition discount models" with "Tuition discount taxonomy" (layered), NEW "Tuition stage typing" (judgment call documented), NEW "B&A School Care rate", NEW "Tuition Audit per-family detail", NEW "Cross-module lock cascade" pointing at §7.5. (7) **CLAUDE.md** extended with two paragraphs codifying patterns that recur: a "Two-stage modules" paragraph noting the Tuition / Budget parallel, and a "Cross-module lock cascade rules" paragraph pointing at §7.5 as the canonical definition referenced from each module's section. (8) Document header bumped 3.7.1 → 3.8.
 - **v3.7.1** — May 2, 2026 — Module-scoped governance authority codification (follow-up to v3.7). Small fix surfaced when reviewing the v3.7 modal copy: `RequestUnlockModal` still carried stale paragraph copy referencing the obsolete three-identity model ("two distinct approvers, other than you"). Replaced with two-identity-model copy that names the canonical fiscal authority for the Budget module: "Submitting records your approval as the first of two. Treasurer (or designee) must confirm to complete the unlock of {scenario_label}. The locked snapshot remains in audit history; this only reopens the live working copy." Audit of the other unlock-flow components (`ApproveUnlockModal`, `RejectUnlockModal`, `WithdrawUnlockModal`, `LockedBanner`) confirmed they were already clean — no remaining three-identity references. (1) **New §3.5 "Module-scoped governance authority in lock/unlock workflows"** codifies the principle that lock/unlock system mechanics are uniform across modules but the canonical governance authority named in user-facing copy is module-specific. Budget names "Treasurer (or designee)" because it is fiscal; future Strategic Plan would name "Board Chair (or designee)" because it is governance; an Accreditation module would name "Head of School (or designee)" because it is curricular. The "or designee" trailer keeps the same string portable across role rotations and ad-hoc designation fallbacks. The system enforces only the permission grant (`approve_unlock`) and the distinct-identity constraint between requester and approval_2; the procedural mapping of which user holds the named role is school-level configuration, not a system rule. (2) **Renumbering**: existing §3.5 (Cross-module data flow) → §3.6, §3.6 (Custom KPI registry per school) → §3.7, §3.7 (Module workflows and stages) → §3.8. Cross-references updated throughout the architecture doc (one in §3.4, one in §5.1's snapshot schema comment, one in §8 module intro, one in Appendix B's settings discussion, one in §12 Phase 2 phase-list, one in Appendix C's "Module workflows" decision row), in `CLAUDE.md` (Module workflows paragraph), and in Migration 019's header reference list. (3) **§8.13 extended** with a "Module-scoped governance authority for the Budget module" paragraph explicitly naming Treasurer (or designee) as the second approver and documenting Libertas's procedural mapping: HoS as typical requester, Treasurer as typical second approver, Board Chair as designee fallback. The paragraph cross-references §3.5 so future readers find both the principle and the Budget-specific instance. (4) **Appendix C "Unlock permission tier"** decision row updated to capture the module-scoped authority pattern alongside the existing permission-grant mechanics; section reference extended to `3.5, 8.13`. No code changes beyond the modal copy. No schema changes. No new RPCs.
 - **v3.6** — May 1, 2026 — Phase 2 polish session: items surfaced during the Final Budget end-to-end exercise. Six refinements + one copy fix; no schema changes, no new RPCs. (1) **Four-tier hierarchical treatment in-app** (architecture §10.4 extended). The four-tier system originally codified for PDF rendering now applies to in-app `BudgetDetailZone`. Tier 1 categories at Cinzel 17px with gold border-bottom; Tier 2 top summaries at 15px semibold with navy@25 border-bottom; Tier 3 mid summaries at 13.5px medium; Tier 4 leaves at 13px navy@85 with the account code in 11px navy@55. Hierarchy reads strongly even in locked state, where the input chrome is gone. Editable input fields on Tier 4 leaves coexist without competing — input chrome reads as "you can change this," strengthened typography reads as the structural backbone. Applies to drafting and locked, Preliminary and Final. (2) **Per-line clock icon suppression in locked state** (§9.1 extended). The audit-history affordance that opens `LineHistoryModal` is now hidden when scenario state is locked. Per-line drilldown is editing-mode functionality; the activity feed remains the comprehensive surface for locked-state audit exploration. New `hideLineHistory` prop on `BudgetDetailZone` threaded down through the row tree. (3) **Recent Activity affordance relocation**. The cream-highlight bordered banner above the budget detail (which competed with the Income heading) is removed. Replaced by a right-aligned text link in the scenario tabs row reading simply "Recent Activity" — no counter, no parenthetical. Click opens the activity feed in a modal. `ActivityFeedPanel` renamed to `ActivityFeedModal`; internal feed UI (count/filter dropdowns, FeedRow list, PDF export) unchanged from the prior inline-panel version — only the shell changed (panel → modal). The pattern matches `LineHistoryModal` / `SubmitLockModal`. (4) **DRAFT treatment uniform across print routes** (§5.3 extended; this was already implemented but had not been codified in the doc). PrintShell renders the watermark + running banner + footer note when `draft={true}` is passed; all three print routes already pass `draft={scenario.state !== 'locked'}`. The doc note clarifies the rule generally so the next print-route addition naturally inherits the same behavior. (5) **Audit log PDF density** tightened. Body text dropped from 11pt to 8.5–9.5pt; tighter line-height (`leading-snug`); tighter row padding. Audit log PDFs now read as reference documents (think SEC filing exhibit) rather than presentation pieces. Justification and reason text remain at full content (no truncation, §9.1 commitment). The two document classes (Operating Budget Detail vs. audit logs) share `PrintShell` letterhead/footer/page-break/DRAFT treatment; only body density differs. (6) **Predecessor card whitespace fix on Final Budget setup**. The `KpiRow` `flex justify-between` (which pushed label far left and amount far right inside each grid cell) replaced with `inline-flex gap-1.5` (label and amount sit close as a connected unit), with the three pairs sharing a horizontal flex row separated by `gap-x-5`. Now reads "Income $1,237,983 · Expenses $1,277,758 · Net -$39,775" rather than three label-value-far-apart blocks. (7) **Sibling-locked banner copy fix**. Removed redundant leading "Scenario " word in three places: the in-app sibling-locked banner in `BudgetStage`, the Submit-button tooltip in `BudgetStage`, and the hardBlock failure message in `budgetLock.js` (which surfaces inside `SubmitLockModal`). All three suffered from the same `Scenario "${scenario_label}"` interpolation pattern producing "Scenario Scenario 1 is currently locked..." Now the interpolated scenario label carries the noun.
 - **v3.5** — May 1, 2026 — Phase 2 follow-on: Final Budget setup gateway, canonical naming of locked artifacts, formal-tone copy convention. Pre-demo session addressing six gaps surfaced during review of the Final Budget surface. (1) **Final Budget setup gateway** (architecture §8.14, new): `BudgetStage` setup view now branches on whether the active stage is the first in its workflow. First stages keep the original three-option flow (`BudgetEmptyState`); non-first stages render a new `PredecessorSelector` showing locked predecessor snapshots as cards (working scenario name from the snapshot, lock date, locker, KPI totals), or a friendly empty state with a link back to the predecessor stage when none exists. The conceptually-wrong "fresh start / CSV import" path no longer surfaces on Final Budget. Card click opens a new `SeedFromPredecessorModal` confirmation modal. (2) **Migration 019** ships `create_scenario_from_snapshot` SECURITY DEFINER RPC: validates predecessor relationship (lower `sort_order`, same `workflow_id`, same AYE), inserts new drafting scenario, copies snapshot lines into `budget_stage_lines` (skipping any with `account_id IS NULL` from prior hard-deletes), tags `app.change_reason` as `'created_from_snapshot: <snapshot_id>'` for permanent audit linkage. (3) **Canonical naming of locked artifacts** (architecture §8.15, new): new `src/lib/scenarioName.js` exposes `getCanonicalLockedArtifactName(aye, stage, fallback)` and the dispatch helper `getDisplayNameForContext(context, refs)`. Locked artifacts now display canonical computed name (`{school} {aye_label} {stage_display_name}`, e.g. "Libertas Academy AYE 2026 Preliminary Budget") in the Operating Budget Detail PDF letterhead (locked variant only) and the LockedBanner heading (all three locked-state variants, since artifact identity does not change while unlock is pending). Working-tool surfaces — scenario tabs, audit-log entries, drafting-mode UI — continue to use the working scenario label. Render-time computation only; no schema change, no snapshot data backfill. (4) **`src/lib/schoolConfig.js`** new: extracts the hardcoded `"Libertas Academy"` school name into a single source of truth referenced by both PrintShell and the canonical-name helper. When multi-tenancy lands and the school name moves to `school_brand_settings`, only this file changes. (5) **Formal tone convention** (architecture §10.11, new): codebase-wide audit of user-facing strings; contractions replaced with full forms ("is not" not "isn't", "cannot" not "can't", "you are" not "you're", etc.). Captured user input exempt; code comments and identifiers exempt. Twelve user-facing strings updated across 9 files (BudgetStage, SubmitLockModal, CoaManagement, AYEManagement, TuitionWorksheet, three print pages, AutoDetectBanner, ImportExportPanel, plus two strings in the unlock validator's exported reason-copy map that used typographic curly apostrophes — those were missed by the initial ASCII-apostrophe sweep until a follow-up Unicode-aware grep caught them). One judgment call: `aria-label="Why can't I delete this?"` was rewritten as `aria-label="Why can I not delete this?"` rather than mechanically expanded as `"Why cannot I delete this?"` (which reads awkwardly even formally) — minor reordering preserves natural English. No phrases were rephrased entirely; mechanical expansion read fine in every other case. (6) **BudgetEmptyState copy cleanup**: removed the redundant "You're working on AYE [year]. Switch above if this isn't the right year." line (the AYE selector above is sufficient identification; the line both repeated and used contractions). (7) **CLAUDE.md** updated with formal-tone paragraph (under user-facing copy conventions) and stage-initialization gateway sub-bullet (under Module workflows and stages). (8) **Architecture doc**: §3.4 extended with stage-initialization-cascade paragraph distinguishing it from the lock-cascade rules; new §8.14, §8.15, §10.11; Appendix B adds Migration 019 to implemented and renumbers needed Migrations 019→020 through 024→025; Appendix C adds three decision rows.
