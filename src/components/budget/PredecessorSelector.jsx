@@ -175,6 +175,7 @@ export default function PredecessorSelector({
               key={snap.id}
               snapshot={snap}
               predecessorStage={stageById[snap.stage_id]}
+              ayeLabel={ayeLabel}
               lockerName={lockerNames[snap.locked_by] || null}
               onSelect={() => onSelectSnapshot(snap, stageById[snap.stage_id])}
             />
@@ -190,7 +191,7 @@ const usd0 = new Intl.NumberFormat('en-US', {
 })
 const fmtUsd = (n) => (n == null ? '—' : usd0.format(Number(n)))
 
-function PredecessorCard({ snapshot, predecessorStage, lockerName, onSelect }) {
+function PredecessorCard({ snapshot, predecessorStage, ayeLabel, lockerName, onSelect }) {
   const lockedAtStr = snapshot.locked_at
     ? new Date(snapshot.locked_at).toLocaleDateString(undefined, {
         year: 'numeric', month: 'long', day: 'numeric',
@@ -198,6 +199,12 @@ function PredecessorCard({ snapshot, predecessorStage, lockerName, onSelect }) {
     : '—'
   const stageLabel =
     predecessorStage?.display_name || snapshot.stage_display_name_at_lock || 'Predecessor'
+  // Heading includes AYE context to disambiguate which specific locked
+  // artifact this card represents — e.g., "AYE 2026 Preliminary Budget"
+  // rather than just "Preliminary Budget". Mirrors the canonical-name
+  // pattern from §8.15 (without the school prefix, since we are already
+  // inside the school-branded app).
+  const cardHeading = ayeLabel ? `${ayeLabel} ${stageLabel}` : stageLabel
 
   return (
     <button
@@ -207,7 +214,7 @@ function PredecessorCard({ snapshot, predecessorStage, lockerName, onSelect }) {
     >
       <div className="flex items-baseline justify-between gap-3 mb-1.5">
         <span className="font-display text-navy text-[15px] tracking-[0.04em]">
-          {stageLabel}
+          {cardHeading}
         </span>
         <span className="font-body text-[11px] text-muted uppercase tracking-wider">
           Locked {lockedAtStr}
