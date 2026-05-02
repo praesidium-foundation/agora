@@ -37,6 +37,18 @@
 -- ============================================================================
 
 
+-- ---- 0. Drop pre-existing approve function -------------------------------
+--
+-- approve_budget_stage_unlock changed return type from text (v1) to
+-- void (v2). PostgreSQL forbids changing the return type via
+-- CREATE OR REPLACE FUNCTION (error 42P13: "cannot change return type
+-- of existing function"), so the v1 function must be dropped first.
+-- The other two functions (request_*, reject_*) keep their void return
+-- type so CREATE OR REPLACE handles them without a drop.
+
+drop function if exists approve_budget_stage_unlock(uuid);
+
+
 -- ---- 1. request_budget_stage_unlock --------------------------------------
 
 create or replace function request_budget_stage_unlock(
