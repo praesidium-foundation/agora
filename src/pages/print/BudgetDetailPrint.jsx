@@ -249,12 +249,21 @@ export default function BudgetDetailPrint() {
         stage: bundle.stage,
       })
 
-  // Subtitle: working scenario name. On DRAFT, this is the primary
-  // identifier ("Scenario 1"). On LOCKED, the canonical title is the
-  // primary identifier; the working name still appears underneath for
-  // continuity with how the budget appeared while it was being drafted.
-  const subtitle = bundle.scenario.scenario_label
-    + (bundle.scenario.description ? ` — ${bundle.scenario.description}` : '')
+  // Subtitle: working scenario name. Shown on DRAFT (drafts are
+  // working tools — scenario context is meaningful). Suppressed on
+  // LOCKED — the canonical title carries the full official identity
+  // and the working name is a working-tool label that does not
+  // belong on the perpetual record (§8.15 principle, applied here:
+  // the same logic that picks canonical naming over working name in
+  // the heading also rules out the working name as a subtitle).
+  // Operational metadata that DOES belong on the locked record
+  // (generation timestamp, "Approved [date] by [name]" banner)
+  // continues to render below — those are facts about the document,
+  // not working-tool labels.
+  const subtitle = draft
+    ? bundle.scenario.scenario_label
+      + (bundle.scenario.description ? ` — ${bundle.scenario.description}` : '')
+    : null
 
   const approvedNote = !draft
     ? {
