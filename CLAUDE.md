@@ -81,6 +81,8 @@ The reason is governance integrity: a locked snapshot is the document a board ch
 
 All three layers must agree. The DB trigger is the source of truth; the application and UI layers exist to make the user experience graceful, not to substitute for the trigger. Migration 015 (sibling lock guards) is the canonical example. See architecture doc Section 8.7.1.
 
+**Unlock workflow on locked scenarios.** Unlock requests on locked scenarios use flag fields (`unlock_requested`, `unlock_request_justification`, `unlock_requested_at`, `unlock_requested_by`, plus paired `unlock_approval_1_*` / `unlock_approval_2_*` columns) on top of `state = 'locked'`, not a separate state machine state. This preserves Migration 015's sibling-lock guards without modification — they check `state = 'locked'` and that remains true throughout the request → first approval → second approval window; only the second-approval transaction transitions state to `'drafting'`. See architecture doc §8.13 for the full workflow (two distinct approvers, initiator separation enforced via CHECK constraints, `approve_unlock` permission inserted between `approve_lock` and `admin` in the hierarchical enum).
+
 ## Architecture reference
 
 The file `agora_architecture.md` at the project root is the **canonical architecture reference** for Agora by Praesidium — schema patterns, module relationships, permission model, design standards, AYE lifecycle, and build sequencing. Read it before any non-trivial schema or feature work. Where conflicts arise between this doc, build prompts, or earlier conversation snippets, the architecture doc wins. Appendix B lists implemented and planned migrations; keep it current.
