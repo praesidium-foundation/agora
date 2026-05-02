@@ -161,14 +161,25 @@ export default function BudgetLineHistoryPrint() {
     : '(account no longer in COA)'
   const draft = data.scenario.state !== 'locked'
 
+  // Subtitle composition with v3.6.1 DRAFT-in-header treatment.
+  // See BudgetActivityPrint for the rationale; same pattern.
+  const baseSubtitle = `${data.scenario.scenario_label} · ${data.aye.label} ${data.stage.display_name}`
+  const subtitle = draft ? (
+    <>
+      {baseSubtitle}{' '}
+      <span className="not-italic font-medium text-status-amber">— DRAFT</span>
+    </>
+  ) : baseSubtitle
+
   return (
     <PrintShell
       title={`${accountLabel} — Change History`}
-      subtitle={`${data.scenario.scenario_label} · ${data.aye.label} ${data.stage.display_name}`}
+      subtitle={subtitle}
       draft={draft}
       draftLabel={draft ? `DRAFT — Audit excerpt` : null}
       generatedAt={new Date()}
       generatedByName={printerName}
+      compact
       backTo={`/modules/budget/${data.stage.id}`}
     >
       {/* Reference-document density (v3.6): smaller text and tighter

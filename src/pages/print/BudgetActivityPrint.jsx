@@ -130,14 +130,31 @@ export default function BudgetActivityPrint() {
     ? formatAbsoluteTimestamp(events[0].changed_at)
     : null
 
+  // Subtitle composition: scenario label + AYE label, with an
+  // " — DRAFT" suffix in status-amber when the source scenario is
+  // not locked. v3.6.1 relocates DRAFT identification from a footer
+  // footnote (afterthought) to a header subtitle (caught by the eye
+  // immediately). Reads as part of the same line as the scenario
+  // identifier but visually distinct enough to be unmissable.
+  const baseSubtitle = `${data.scenario.scenario_label} · ${data.aye.label}${
+    data.scenario.description ? ' — ' + data.scenario.description : ''
+  }`
+  const subtitle = draft ? (
+    <>
+      {baseSubtitle}{' '}
+      <span className="not-italic font-medium text-status-amber">— DRAFT</span>
+    </>
+  ) : baseSubtitle
+
   return (
     <PrintShell
       title={`Activity History — ${data.stage.display_name}`}
-      subtitle={`${data.scenario.scenario_label} · ${data.aye.label}${data.scenario.description ? ' — ' + data.scenario.description : ''}`}
+      subtitle={subtitle}
       draft={draft}
       draftLabel={draft ? 'DRAFT — Audit log' : null}
       generatedAt={new Date()}
       generatedByName={printerName}
+      compact
       backTo={`/modules/budget/${data.stage.id}`}
     >
       {/* Audit log PDFs render at reference-document density (v3.6) —

@@ -29,9 +29,12 @@ import './print.css'
 // Props:
 //   title         — document title rendered in the letterhead
 //                   (e.g., "AYE 2026 Preliminary Budget")
-//   subtitle      — optional second-line subtitle (scenario name, etc.)
+//   subtitle      — optional second-line subtitle. Accepts string OR
+//                   React node so callers can style fragments (e.g.,
+//                   highlight a "— DRAFT" suffix).
 //   draft         — boolean; when true, render watermark + DRAFT header
-//                   banner + "preliminary working version" footer note
+//                   banner + (in non-compact mode) "preliminary working
+//                   version" footer note
 //   draftLabel    — text rendered in the small DRAFT banner across the
 //                   top of every page (e.g., "DRAFT — Pending Lock Review")
 //   approvedNote  — when locked: an object {locked_at, locked_by_name,
@@ -40,6 +43,17 @@ import './print.css'
 //   schoolName    — for the running footer
 //   generatedAt   — Date object captured at render time
 //   generatedByName — full name of the printing user
+//   compact       — when true (audit log PDFs, v3.6.1):
+//                     · the header "Generated [date] at [time] by [name]"
+//                       line is suppressed (caller carries DRAFT in
+//                       subtitle instead)
+//                     · the footer "Preliminary working version..."
+//                       sentence is suppressed
+//                     · the footer attribution line expands to include
+//                       time + generator name
+//                   When false (Operating Budget Detail and similar
+//                   primary-record PDFs): existing header + footer
+//                   structure preserved.
 //   children      — body content
 //   backTo        — path to navigate to on Back click
 //   backLabel     — link label (default "Back to budget")
@@ -52,6 +66,7 @@ export default function PrintShell({
   schoolName = getSchoolName(),
   generatedAt,
   generatedByName,
+  compact = false,
   children,
   backTo = '/dashboard',
   backLabel = 'Back to budget',
@@ -168,10 +183,16 @@ export default function PrintShell({
                   {subtitle}
                 </p>
               )}
-              <p className="font-body text-[10px] text-muted tracking-wider uppercase" style={{ marginTop: '4pt' }}>
-                Generated {generatedDateStr} at {generatedTimeStr}
-                {generatedByName ? ` by ${generatedByName}` : ''}
-              </p>
+              {/* Header generation line. Suppressed in compact mode
+                  (audit log PDFs, v3.6.1) — that attribution moves to
+                  the footer where it reads as document metadata
+                  rather than competing for the subtitle's place. */}
+              {!compact && (
+                <p className="font-body text-[10px] text-muted tracking-wider uppercase" style={{ marginTop: '4pt' }}>
+                  Generated {generatedDateStr} at {generatedTimeStr}
+                  {generatedByName ? ` by ${generatedByName}` : ''}
+                </p>
+              )}
             </div>
           </div>
         </header>
@@ -179,7 +200,11 @@ export default function PrintShell({
         <div className="print-body">{children}</div>
 
         <footer className="print-footer mt-10 pt-4 border-t-[0.5px] border-navy/30 text-[10px] text-muted">
-          {draft && (
+          {/* Verbose draft footnote — shown only on non-compact PDFs
+              (Operating Budget Detail). Compact mode (audit logs)
+              carries DRAFT in the header subtitle instead, so the
+              footnote here would be redundant. */}
+          {draft && !compact && (
             <p className="italic mb-1">
               Preliminary working version, subject to change. Generated{' '}
               {generatedDateStr}. Not for distribution.
@@ -199,8 +224,21 @@ export default function PrintShell({
               )}
             </div>
           )}
+          {/* Footer attribution line. In compact mode (audit log
+              PDFs) the header omits generation metadata, so this
+              footer line carries the full attribution: school +
+              date + time + generator name. In non-compact mode
+              (Operating Budget Detail) the full attribution lives
+              in the header; this line keeps its date-only form to
+              avoid duplication. */}
           <p className="mt-1">
             {schoolName} · Generated {generatedDateStr}
+            {compact && (
+              <>
+                {' '}at {generatedTimeStr}
+                {generatedByName ? ` by ${generatedByName}` : ''}
+              </>
+            )}
           </p>
         </footer>
       </article>
