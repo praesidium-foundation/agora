@@ -1,32 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 
-// Discount Envelopes section — three of the four discount mechanisms
+// Projected Discounts section — three of the four discount mechanisms
 // in the layered taxonomy (architecture §7.3). The multi-student tier
 // discount is implicit in the tier rates (handled by TierRatesSection);
-// these three are the explicit envelopes:
+// these three are the explicit projected $ amounts:
 //
-//   Faculty discount rate  — fixed percentage off gross tuition for
-//                            qualifying faculty children. Default 50%
-//                            at Libertas. Configured here as a rule;
-//                            the per-family allocation happens in
-//                            Stage 2 (Tuition Audit).
-//   Other discount         — board-granted budget envelope for ad-hoc
-//                            tuition awards. Per-family allocation
-//                            happens in Stage 2.
-//   Financial Aid          — committee-managed budget envelope. Per-
-//                            family allocation happens in Stage 2.
+//   Faculty Discount   — projected total dollar value of faculty
+//                        children's discounts. Estimate based on
+//                        current staff plus expected new hires;
+//                        actuals reconcile in Tuition Audit (Stage 2).
+//   Other Discounts    — board-granted budget for ad-hoc tuition
+//                        awards. Per-family allocation in Stage 2.
+//   Financial Aid      — committee-managed budget for FA awards.
+//                        Per-family allocation in Stage 2.
+//
+// v3.8.2 (B1.1): the Faculty row is a $ input only (not %). The
+// existing faculty_discount_pct column persists in schema (needed
+// for Stage 2 per-family allocation math) but does NOT render in the
+// Stage 1 UI. Help text on the Faculty row clarifies the distinction.
+//
+// File renamed from DiscountEnvelopesSection.jsx in v3.8.2; sub-row
+// labels updated ("Other discount envelope" → "Other Discounts";
+// "Financial Aid envelope" → "Financial Aid"). Field maps:
+//   projected_faculty_discount_amount  (new column from Migration 027)
+//   projected_other_discount           (renamed from other_discount_envelope)
+//   projected_financial_aid            (renamed from financial_aid_envelope)
 //
 // Visual hierarchy: Tier 1 section header (Cinzel 17px navy with gold
 // border-bottom). Three rows below as Tier 4-equivalent leaf rows.
 //
 // Props:
-//   facultyDiscountPct                    numeric (0–100)
-//   otherDiscountEnvelope                 numeric
-//   financialAidEnvelope                  numeric
-//   onChangeFacultyDiscountPct            (next) => void
-//   onChangeOtherDiscountEnvelope         (next) => void
-//   onChangeFinancialAidEnvelope          (next) => void
-//   readOnly                              boolean
+//   projectedFacultyDiscountAmount         numeric
+//   projectedOtherDiscount                 numeric
+//   projectedFinancialAid                  numeric
+//   onChangeProjectedFacultyDiscountAmount (next) => void
+//   onChangeProjectedOtherDiscount         (next) => void
+//   onChangeProjectedFinancialAid          (next) => void
+//   readOnly                               boolean
 
 const usd0 = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -38,36 +48,18 @@ function fmtUsd(n) {
   return usd0.format(Number(n) || 0)
 }
 
-function fmtPct(n) {
-  if (n === null || n === undefined) return '—'
-  const num = Number(n)
-  if (!Number.isFinite(num)) return '—'
-  return `${num.toFixed(2)}%`
-}
-
 function parseCurrency(raw) {
   const s = String(raw ?? '').trim()
   if (s === '') return 0
   const cleaned = s.replace(/[$,\s]/g, '')
   const n = Number(cleaned)
   if (!Number.isFinite(n) || n < 0) {
-    throw new Error('Envelope must be a non-negative number')
+    throw new Error('Amount must be a non-negative number')
   }
   return n
 }
 
-function parsePercent(raw) {
-  const s = String(raw ?? '').trim()
-  if (s === '') return 0
-  const cleaned = s.replace(/[%\s]/g, '')
-  const n = Number(cleaned)
-  if (!Number.isFinite(n) || n < 0 || n > 100) {
-    throw new Error('Percentage must be between 0 and 100')
-  }
-  return n
-}
-
-function ValueEditor({ initial, parser, onSave, onCancel, ariaLabel }) {
+function ValueEditor({ initial, onSave, onCancel, ariaLabel }) {
   const [draft, setDraft] = useState(
     Number.isFinite(Number(initial)) ? String(Number(initial)) : ''
   )
@@ -81,7 +73,7 @@ function ValueEditor({ initial, parser, onSave, onCancel, ariaLabel }) {
 
   function commit() {
     try {
-      onSave(parser(draft))
+      onSave(parseCurrency(draft))
     } catch (e) {
       setError(e.message)
     }
@@ -120,8 +112,9 @@ function ValueEditor({ initial, parser, onSave, onCancel, ariaLabel }) {
   )
 }
 
-function DiscountRow({ label, hint, value, display, parser, fieldKey, editingKey, setEditing, onSave, readOnly }) {
+function DiscountRow({ label, hint, value, fieldKey, editingKey, setEditing, onSave, readOnly }) {
   const editing = editingKey === fieldKey
+  const display = fmtUsd(value)
   return (
     <div className="flex items-center gap-3 pr-3 py-2 border-b-[0.5px] border-card-border hover:bg-cream-highlight/40">
       <div className="flex-1 min-w-0">
@@ -137,7 +130,6 @@ function DiscountRow({ label, hint, value, display, parser, fieldKey, editingKey
       ) : editing ? (
         <ValueEditor
           initial={Number(value) || 0}
-          parser={parser}
           onSave={(v) => { onSave(v); setEditing(null) }}
           onCancel={() => setEditing(null)}
           ariaLabel={label}
@@ -157,23 +149,22 @@ function DiscountRow({ label, hint, value, display, parser, fieldKey, editingKey
   )
 }
 
-function DiscountEnvelopesSection({
-  facultyDiscountPct,
-  otherDiscountEnvelope,
-  financialAidEnvelope,
-  onChangeFacultyDiscountPct,
-  onChangeOtherDiscountEnvelope,
-  onChangeFinancialAidEnvelope,
+function ProjectedDiscountsSection({
+  projectedFacultyDiscountAmount,
+  projectedOtherDiscount,
+  projectedFinancialAid,
+  onChangeProjectedFacultyDiscountAmount,
+  onChangeProjectedOtherDiscount,
+  onChangeProjectedFinancialAid,
   readOnly = false,
 }) {
   const [editing, setEditing] = useState(null)
 
   return (
     <section className="mb-8">
-      {/* Tier 1 section header */}
       <div className="flex items-center gap-3 px-2 py-3 border-b-2 border-gold/60 mb-2">
         <span className="font-display text-navy text-[17px] tracking-[0.08em] uppercase flex-1">
-          Discount envelopes
+          Projected discounts
         </span>
       </div>
 
@@ -186,39 +177,33 @@ function DiscountEnvelopesSection({
 
       <div className="px-2">
         <DiscountRow
-          label="Faculty discount rate"
-          hint="Percentage off gross tuition for qualifying faculty children. Default 50%."
-          value={facultyDiscountPct}
-          display={fmtPct(facultyDiscountPct)}
-          parser={parsePercent}
-          fieldKey="faculty_pct"
+          label="Faculty Discount"
+          hint="Projected total dollar value of faculty children's discounts. Estimate based on current staff plus expected new hires; actuals reconcile in Tuition Audit (Stage 2)."
+          value={projectedFacultyDiscountAmount}
+          fieldKey="faculty_amount"
           editingKey={editing}
           setEditing={setEditing}
-          onSave={onChangeFacultyDiscountPct}
+          onSave={onChangeProjectedFacultyDiscountAmount}
           readOnly={readOnly}
         />
         <DiscountRow
-          label="Other discount envelope"
+          label="Other Discounts"
           hint="Board-granted budget for ad-hoc tuition awards. Per-family allocation happens in Tuition Audit (Stage 2)."
-          value={otherDiscountEnvelope}
-          display={fmtUsd(otherDiscountEnvelope)}
-          parser={parseCurrency}
-          fieldKey="other_envelope"
+          value={projectedOtherDiscount}
+          fieldKey="other"
           editingKey={editing}
           setEditing={setEditing}
-          onSave={onChangeOtherDiscountEnvelope}
+          onSave={onChangeProjectedOtherDiscount}
           readOnly={readOnly}
         />
         <DiscountRow
-          label="Financial Aid envelope"
+          label="Financial Aid"
           hint="Committee-managed budget for Financial Aid awards. Per-family allocation happens in Tuition Audit (Stage 2)."
-          value={financialAidEnvelope}
-          display={fmtUsd(financialAidEnvelope)}
-          parser={parseCurrency}
-          fieldKey="fa_envelope"
+          value={projectedFinancialAid}
+          fieldKey="financial_aid"
           editingKey={editing}
           setEditing={setEditing}
-          onSave={onChangeFinancialAidEnvelope}
+          onSave={onChangeProjectedFinancialAid}
           readOnly={readOnly}
         />
       </div>
@@ -226,4 +211,4 @@ function DiscountEnvelopesSection({
   )
 }
 
-export default DiscountEnvelopesSection
+export default ProjectedDiscountsSection

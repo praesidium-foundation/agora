@@ -1,6 +1,6 @@
 import TierRatesSection from './TierRatesSection'
 import FeesSection from './FeesSection'
-import DiscountEnvelopesSection from './DiscountEnvelopesSection'
+import ProjectedDiscountsSection from './ProjectedDiscountsSection'
 import FamilyDistributionSection from './FamilyDistributionSection'
 
 // Configuration zone — the four Stage 1 (Tuition Planning) sections in
@@ -14,35 +14,46 @@ import FamilyDistributionSection from './FamilyDistributionSection'
 //
 // Read-only mode (parent passes readOnly = true when scenario state is
 // not 'drafting' OR user lacks edit permission) cascades to every
-// section: input chrome disappears; values render as plain text; the
-// "+ Add tier" / "× remove" affordances vanish.
+// section.
+//
+// v3.8.2 (B1.1): four section refinements landed.
+//   1. Tier Rates gained a Discount column + BASE badge.
+//   2. "Per-student fees" → "Tuition fees" (the B&A Care line is hourly,
+//      not per-student).
+//   3. "Discount Envelopes" → "Projected Discounts" (component renamed
+//      to ProjectedDiscountsSection.jsx); Faculty Discount row is now
+//      a $ input (the configured % column persists in schema for
+//      Stage 2 per-family math but does not render in Stage 1 UI).
+//   4. Family Distribution full reframe — total_students + total_families
+//      pair at top, breakdown_pct column, top-tier-avg-students input
+//      below the table.
 //
 // Field saves flow up via per-field onChange callbacks. The parent
 // page (TuitionWorksheet.jsx) owns the Supabase write + toast on
 // failure. This zone is presentational; it holds no data state of
-// its own (the section components hold per-row inline-edit drafts;
-// committed values live in the parent's scenario object).
+// its own.
 //
 // Props:
-//   scenario              — the active scenario row (full object). When
-//                            null, this component is not rendered (the
-//                            page renders TuitionEmptyState instead).
+//   scenario              — the active scenario row (full object)
 //   onUpdateField(field, value)
-//                          — called when any direct field changes
-//                            (faculty_discount_pct, three fees, three
-//                            envelope rows). Field name matches the
-//                            DB column.
+//                          — called for direct scalar field changes
+//                            (curriculum/enrollment fees, B&A rate,
+//                            three projected-discount $s, total_students,
+//                            top_tier_avg_students_per_family). Field
+//                            name matches the DB column.
 //   onUpdateTierRates(rows)
-//                          — called when tier_rates jsonb changes
-//                            (add/remove/edit rate). Add and remove
-//                            also trigger onUpdateFamilyDistribution
-//                            atomically so the two arrays stay in
-//                            sync (handled in TierRatesSection).
-//   onUpdateFamilyDistribution(rows)
-//                          — called when estimated_family_distribution
-//                            jsonb changes (per-row count edit OR a
-//                            tier shape change initiated from
-//                            TierRatesSection).
+//                          — tier_rates jsonb (also recomputes tier_count
+//                            in the page handler).
+//   onUpdateFamilyDistribution(rows, opts)
+//                          — estimated_family_distribution jsonb. opts
+//                            may include { recompute: true } to trigger
+//                            re-derivation of family_count from current
+//                            total_families.
+//   onUpdateTotalFamilies(value, isOverride)
+//                          — explicit override semantics.
+//                            isOverride=true: store as user override.
+//                            isOverride=false: clear override; persist
+//                            the derived value (which may be null).
 //   readOnly              — boolean
 
 function TuitionConfigurationZone({
@@ -50,12 +61,13 @@ function TuitionConfigurationZone({
   onUpdateField,
   onUpdateTierRates,
   onUpdateFamilyDistribution,
+  onUpdateTotalFamilies,
   readOnly = false,
 }) {
   if (!scenario) return null
 
   const tierRates = Array.isArray(scenario.tier_rates) ? scenario.tier_rates : []
-  const familyDistribution = Array.isArray(scenario.estimated_family_distribution)
+  const distribution = Array.isArray(scenario.estimated_family_distribution)
     ? scenario.estimated_family_distribution
     : []
 
@@ -63,7 +75,7 @@ function TuitionConfigurationZone({
     <div className="px-2 py-2">
       <TierRatesSection
         tierRates={tierRates}
-        familyDistribution={familyDistribution}
+        familyDistribution={distribution}
         onChangeTierRates={onUpdateTierRates}
         onChangeFamilyDistribution={onUpdateFamilyDistribution}
         readOnly={readOnly}
@@ -79,20 +91,26 @@ function TuitionConfigurationZone({
         readOnly={readOnly}
       />
 
-      <DiscountEnvelopesSection
-        facultyDiscountPct={scenario.faculty_discount_pct}
-        otherDiscountEnvelope={scenario.other_discount_envelope}
-        financialAidEnvelope={scenario.financial_aid_envelope}
-        onChangeFacultyDiscountPct={(v) => onUpdateField('faculty_discount_pct', v)}
-        onChangeOtherDiscountEnvelope={(v) => onUpdateField('other_discount_envelope', v)}
-        onChangeFinancialAidEnvelope={(v) => onUpdateField('financial_aid_envelope', v)}
+      <ProjectedDiscountsSection
+        projectedFacultyDiscountAmount={scenario.projected_faculty_discount_amount}
+        projectedOtherDiscount={scenario.projected_other_discount}
+        projectedFinancialAid={scenario.projected_financial_aid}
+        onChangeProjectedFacultyDiscountAmount={(v) => onUpdateField('projected_faculty_discount_amount', v)}
+        onChangeProjectedOtherDiscount={(v) => onUpdateField('projected_other_discount', v)}
+        onChangeProjectedFinancialAid={(v) => onUpdateField('projected_financial_aid', v)}
         readOnly={readOnly}
       />
 
       <FamilyDistributionSection
-        familyDistribution={familyDistribution}
+        distribution={distribution}
         tierRates={tierRates}
-        onChange={onUpdateFamilyDistribution}
+        totalStudents={scenario.total_students}
+        totalFamilies={scenario.total_families}
+        topTierAvgStudentsPerFamily={scenario.top_tier_avg_students_per_family}
+        onChangeTotalStudents={(v) => onUpdateField('total_students', v)}
+        onChangeTotalFamilies={onUpdateTotalFamilies}
+        onChangeDistribution={onUpdateFamilyDistribution}
+        onChangeTopTierAvgStudentsPerFamily={(v) => onUpdateField('top_tier_avg_students_per_family', v)}
         readOnly={readOnly}
       />
 

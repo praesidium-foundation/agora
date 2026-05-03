@@ -5,6 +5,10 @@ import { useAuth } from '../../lib/AuthProvider'
 import { useModulePermission } from '../../lib/usePermission'
 import { useToast } from '../../lib/Toast'
 import { defaultTierRates, defaultFamilyDistribution } from '../../lib/tuitionDefaults'
+import {
+  applyDerivedFamilyCounts,
+  computeTotalFamilies,
+} from '../../lib/tuitionMath'
 import AppShell from '../../components/AppShell'
 import AYESelector from '../../components/AYESelector'
 import Breadcrumb from '../../components/Breadcrumb'
@@ -345,7 +349,7 @@ function TuitionWorksheet() {
       supabase.from('academic_years').select('id, label').eq('id', ayeId).single(),
       supabase
         .from('tuition_worksheet_scenarios')
-        .select('id, scenario_label, description, is_recommended, state, created_at, locked_at, locked_by, locked_via, override_justification, tier_count, tier_rates, faculty_discount_pct, other_discount_envelope, financial_aid_envelope, curriculum_fee_per_student, enrollment_fee_per_student, before_after_school_hourly_rate, estimated_family_distribution, actual_before_after_school_hours, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
+        .select('id, scenario_label, description, is_recommended, state, created_at, locked_at, locked_by, locked_via, override_justification, tier_count, tier_rates, faculty_discount_pct, projected_faculty_discount_amount, projected_other_discount, projected_financial_aid, curriculum_fee_per_student, enrollment_fee_per_student, before_after_school_hourly_rate, estimated_family_distribution, total_students, total_families, top_tier_avg_students_per_family, actual_before_after_school_hours, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
         .eq('aye_id', ayeId)
         .eq('stage_id', stage.id)
         .order('created_at', { ascending: true }),
@@ -405,12 +409,17 @@ function TuitionWorksheet() {
           tier_count: 4,
           tier_rates: defaultTierRates(),
           faculty_discount_pct: 50.00,
-          other_discount_envelope: 0,
-          financial_aid_envelope: 0,
+          // v3.8.2 (B1.1): renamed + new fields
+          projected_faculty_discount_amount: 0,
+          projected_other_discount: 0,
+          projected_financial_aid: 0,
           curriculum_fee_per_student: 0,
           enrollment_fee_per_student: 0,
           before_after_school_hourly_rate: 0,
           estimated_family_distribution: defaultFamilyDistribution(),
+          total_students: null,
+          total_families: null,
+          top_tier_avg_students_per_family: null,
           created_by: user?.id ?? null,
           updated_by: user?.id ?? null,
         })
@@ -458,9 +467,46 @@ function TuitionWorksheet() {
     return true
   }, [activeScenario, user?.id, toast])
 
+  // Generic field updater. For most fields a flat persistFields
+  // suffices. For `total_students` and `top_tier_avg_students_per_family`
+  // we additionally re-derive total_families when the user is tracking
+  // the derived value (i.e., not overriding) so that derived family
+  // counts stay consistent without manual recompute on the user's part.
   const handleUpdateField = useCallback(
-    (field, value) => persistFields({ [field]: value }),
-    [persistFields]
+    async (field, value) => {
+      if (field === 'total_students' || field === 'top_tier_avg_students_per_family') {
+        const totalFamilies = activeScenario?.total_families
+        const oldDerived = computeTotalFamilies({
+          totalStudents: activeScenario?.total_students,
+          distribution: activeScenario?.estimated_family_distribution,
+          topTierAvgStudents: activeScenario?.top_tier_avg_students_per_family,
+        })
+        const isTrackingDerived =
+          totalFamilies != null
+          && oldDerived != null
+          && Number(totalFamilies) === Number(oldDerived)
+        if (isTrackingDerived) {
+          const nextStudents = field === 'total_students' ? value : activeScenario?.total_students
+          const nextTopAvg = field === 'top_tier_avg_students_per_family' ? value : activeScenario?.top_tier_avg_students_per_family
+          const newDerived = computeTotalFamilies({
+            totalStudents: nextStudents,
+            distribution: activeScenario?.estimated_family_distribution,
+            topTierAvgStudents: nextTopAvg,
+          })
+          const dist = Array.isArray(activeScenario?.estimated_family_distribution)
+            ? activeScenario.estimated_family_distribution
+            : []
+          const nextDist = applyDerivedFamilyCounts(dist, newDerived)
+          return persistFields({
+            [field]: value,
+            total_families: newDerived,
+            estimated_family_distribution: nextDist,
+          })
+        }
+      }
+      return persistFields({ [field]: value })
+    },
+    [activeScenario, persistFields]
   )
 
   const handleUpdateTierRates = useCallback(
@@ -468,9 +514,80 @@ function TuitionWorksheet() {
     [persistFields]
   )
 
+  // Distribution save with optional family_count recomputation. The
+  // section component buffers breakdown_pct edits locally and only
+  // calls this handler when the breakdown sum is valid (100 ± 0.01)
+  // OR cleared to zero. opts.recompute=true tells us to derive
+  // family_count for each row from the current total_families before
+  // saving, so the stored jsonb stays self-consistent for downstream
+  // reads.
   const handleUpdateFamilyDistribution = useCallback(
-    (rows) => persistFields({ estimated_family_distribution: rows }),
-    [persistFields]
+    async (rows, opts = {}) => {
+      const totalFamilies = activeScenario?.total_families
+      const next = opts.recompute
+        ? applyDerivedFamilyCounts(rows, totalFamilies)
+        : rows
+      // v3.8.2: when total_families is currently NOT overridden (i.e.,
+      // sitting at the previously-derived value), changing breakdowns
+      // can shift the derived total_families. We re-derive and update
+      // total_families IFF the user has not actively overridden — we
+      // detect that by comparing current total_families to the freshly-
+      // computed derived value at the OLD distribution. If they match,
+      // the user is "tracking derived" and we keep tracking; if they
+      // diverge, the user has overridden and we leave total_families
+      // alone (override sticks).
+      const oldDerived = computeTotalFamilies({
+        totalStudents: activeScenario?.total_students,
+        distribution: activeScenario?.estimated_family_distribution,
+        topTierAvgStudents: activeScenario?.top_tier_avg_students_per_family,
+      })
+      const isTrackingDerived =
+        totalFamilies != null
+        && oldDerived != null
+        && Number(totalFamilies) === Number(oldDerived)
+      if (isTrackingDerived) {
+        const newDerived = computeTotalFamilies({
+          totalStudents: activeScenario?.total_students,
+          distribution: next,
+          topTierAvgStudents: activeScenario?.top_tier_avg_students_per_family,
+        })
+        const finalDist = applyDerivedFamilyCounts(next, newDerived)
+        return persistFields({
+          estimated_family_distribution: finalDist,
+          total_families: newDerived,
+        })
+      }
+      return persistFields({ estimated_family_distribution: next })
+    },
+    [activeScenario, persistFields]
+  )
+
+  // Total families override semantics. isOverride=true: persist value
+  // as the explicit override. isOverride=false: clear override; persist
+  // the supplied derived value (which may be null if it cannot be
+  // derived).
+  const handleUpdateTotalFamilies = useCallback(
+    async (value, isOverride) => {
+      // Re-derive family_count for each row against the new
+      // total_families so the stored jsonb stays consistent with
+      // downstream reads.
+      const dist = Array.isArray(activeScenario?.estimated_family_distribution)
+        ? activeScenario.estimated_family_distribution
+        : []
+      const nextDist = applyDerivedFamilyCounts(dist, value)
+      // Either branch persists value to total_families. The "override"
+      // distinction matters only if we ever store an "is_override" flag
+      // — today we infer override state by comparing total_families
+      // against the live-derived value (see FamilyDistributionSection).
+      // The flag is part of the API for future-proofing; B1.1 collapses
+      // both branches to a single persist call.
+      void isOverride
+      return persistFields({
+        total_families: value,
+        estimated_family_distribution: nextDist,
+      })
+    },
+    [activeScenario, persistFields]
   )
 
   // ---- scenario CRUD ---------------------------------------------------
@@ -570,26 +687,31 @@ function TuitionWorksheet() {
 
   // ---- stats (data-driven; direct sums in B1, computed KPIs in C) ------
 
+  // v3.8.2 (B1.1): stats read from new direct fields (total_students,
+  // total_families, projected_*). Em-dashes when underlying inputs
+  // are null (rather than zero) so a fresh scenario surfaces "not yet
+  // entered" honestly.
   const stats = useMemo(() => {
     if (!activeScenario) return []
     const rates = Array.isArray(activeScenario.tier_rates) ? activeScenario.tier_rates : []
-    const dist = Array.isArray(activeScenario.estimated_family_distribution)
-      ? activeScenario.estimated_family_distribution
-      : []
-
     const tier1 = rates.find((r) => Number(r.tier_size) === 1)
     const tier1Rate = tier1 ? Number(tier1.per_student_rate) || 0 : 0
 
-    const totalFamilies = dist.reduce((sum, r) => sum + (Number(r.family_count) || 0), 0)
-    const totalStudents = dist.reduce(
-      (sum, r) => sum + (Number(r.tier_size) || 0) * (Number(r.family_count) || 0),
-      0
-    )
-    const projectedGrossAtTier1 = tier1Rate * totalStudents
+    const totalStudents = activeScenario.total_students
+    const totalFamilies = activeScenario.total_families
 
-    const totalEnvelopes =
-      (Number(activeScenario.other_discount_envelope) || 0) +
-      (Number(activeScenario.financial_aid_envelope) || 0)
+    const projectedGrossAtTier1 =
+      totalStudents != null && Number.isFinite(Number(totalStudents))
+        ? tier1Rate * Number(totalStudents)
+        : null
+
+    // Sum of three projected discount $ fields. Always defined (the DB
+    // columns are NOT NULL or default 0); render even when zero so the
+    // sidebar is informative as the user fills the page in.
+    const totalProjectedDiscounts =
+      (Number(activeScenario.projected_faculty_discount_amount) || 0) +
+      (Number(activeScenario.projected_other_discount) || 0) +
+      (Number(activeScenario.projected_financial_aid) || 0)
 
     return [
       {
@@ -597,25 +719,25 @@ function TuitionWorksheet() {
         label: 'Projected gross at Tier 1',
         value: projectedGrossAtTier1,
         format: 'currency',
-        subtitle: 'If every family paid the single-student rate',
+        subtitle: 'Total students × Tier 1 rate',
       },
       {
-        key: 'total_envelopes',
-        label: 'Total discount envelopes',
-        value: totalEnvelopes,
+        key: 'total_projected_discounts',
+        label: 'Total projected discounts',
+        value: totalProjectedDiscounts,
         format: 'currency',
-        subtitle: 'Other + Financial Aid (Stage 2 allocation)',
+        subtitle: 'Faculty + Other + Financial Aid',
       },
       {
         key: 'projected_families',
         label: 'Projected families',
-        value: totalFamilies,
+        value: totalFamilies != null ? Number(totalFamilies) : null,
         format: 'integer',
       },
       {
         key: 'projected_students',
         label: 'Projected students',
-        value: totalStudents,
+        value: totalStudents != null ? Number(totalStudents) : null,
         format: 'integer',
       },
     ]
@@ -795,6 +917,7 @@ function TuitionWorksheet() {
                 onUpdateField={handleUpdateField}
                 onUpdateTierRates={handleUpdateTierRates}
                 onUpdateFamilyDistribution={handleUpdateFamilyDistribution}
+                onUpdateTotalFamilies={handleUpdateTotalFamilies}
                 readOnly={readOnly}
               />
             )}

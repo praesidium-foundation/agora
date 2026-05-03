@@ -86,16 +86,21 @@ function TuitionNewScenarioModal({
         state: 'drafting',
         created_by: userId ?? null,
         updated_by: userId ?? null,
-        // Configuration: copy from current OR seed fresh defaults
-        tier_count:                       isCopy ? currentScenario.tier_count                   : 4,
-        tier_rates:                       isCopy ? currentScenario.tier_rates                   : defaultTierRates(),
-        faculty_discount_pct:             isCopy ? currentScenario.faculty_discount_pct         : 50.00,
-        other_discount_envelope:          isCopy ? currentScenario.other_discount_envelope      : 0,
-        financial_aid_envelope:           isCopy ? currentScenario.financial_aid_envelope       : 0,
-        curriculum_fee_per_student:       isCopy ? currentScenario.curriculum_fee_per_student   : 0,
-        enrollment_fee_per_student:       isCopy ? currentScenario.enrollment_fee_per_student   : 0,
-        before_after_school_hourly_rate:  isCopy ? currentScenario.before_after_school_hourly_rate : 0,
-        estimated_family_distribution:    isCopy ? currentScenario.estimated_family_distribution : defaultFamilyDistribution(),
+        // Configuration: copy from current OR seed fresh defaults.
+        // v3.8.2 (B1.1) renames + new fields.
+        tier_count:                          isCopy ? currentScenario.tier_count                          : 4,
+        tier_rates:                          isCopy ? currentScenario.tier_rates                          : defaultTierRates(),
+        faculty_discount_pct:                isCopy ? currentScenario.faculty_discount_pct                : 50.00,
+        projected_faculty_discount_amount:   isCopy ? currentScenario.projected_faculty_discount_amount   : 0,
+        projected_other_discount:            isCopy ? currentScenario.projected_other_discount            : 0,
+        projected_financial_aid:             isCopy ? currentScenario.projected_financial_aid             : 0,
+        curriculum_fee_per_student:          isCopy ? currentScenario.curriculum_fee_per_student          : 0,
+        enrollment_fee_per_student:          isCopy ? currentScenario.enrollment_fee_per_student          : 0,
+        before_after_school_hourly_rate:     isCopy ? currentScenario.before_after_school_hourly_rate     : 0,
+        estimated_family_distribution:       isCopy ? currentScenario.estimated_family_distribution       : defaultFamilyDistribution(),
+        total_students:                      isCopy ? currentScenario.total_students                      : null,
+        total_families:                      isCopy ? currentScenario.total_families                      : null,
+        top_tier_avg_students_per_family:    isCopy ? currentScenario.top_tier_avg_students_per_family    : null,
       }
 
       if (!insert.scenario_label) {

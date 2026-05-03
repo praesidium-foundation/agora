@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { tierDiscountPct } from '../../lib/tuitionMath'
 
 // Tier Rates section — the spine of the layered discount taxonomy
 // (architecture §7.3). Multi-student tiers are the primary discount
@@ -10,10 +11,17 @@ import { useEffect, useRef, useState } from 'react'
 // must stay in sync (§7.3 — the projection table reads its tier rows
 // from tier_rates).
 //
-// Tier 1 is permanent (always present; cannot be removed). The
-// highest-tier row's label uses "X+" framing ("4+ students"); when a
+// Tier 1 is permanent (always present; cannot be removed) and renders
+// with a "BASE" badge in the tier-number column rather than the
+// numeric "1" — Tier 1 is the reference rate against which all
+// per-tier discounts are computed (v3.8.2, B1.1). The highest-tier
+// row's family-size label uses "X+" framing ("4+ students"); when a
 // new tier is added, the previous "X+" row reverts to plain "X" and
 // the new top tier becomes "(X+1)+".
+//
+// v3.8.2 (B1.1) adds a DISCOUNT column showing each tier's percentage
+// off the Tier 1 rate. Empty for Tier 1 (the base); muted italic for
+// Tiers 2+. Read-only by definition (computed).
 //
 // Editing model mirrors Budget's direct-edit-with-undo (architecture
 // §8.3). Click an amount → inline numeric input. Enter or blur saves;
@@ -22,8 +30,9 @@ import { useEffect, useRef, useState } from 'react'
 //
 // Props:
 //   tierRates              — array of { tier_size, per_student_rate, applies_when_n_students }
-//   familyDistribution     — array of { tier_size, family_count }; needed to confirm
-//                            "is this tier non-empty in the projection?" before remove
+//   familyDistribution     — array of { tier_size, breakdown_pct, family_count }
+//                             (B1.1 jsonb shape); needed so add/remove
+//                             tier operations keep both arrays in sync
 //   onChangeTierRates       (next) => void
 //   onChangeFamilyDistribution (next) => void
 //   readOnly               — true when scenario state != 'drafting' or user lacks edit perm
@@ -51,11 +60,18 @@ function parseAmountInput(raw) {
 }
 
 function tierLabel(tierSize, isHighest) {
-  if (isHighest && tierSize > 1) {
-    return `${tierSize}+ students in family`
-  }
+  if (isHighest && tierSize > 1) return `${tierSize}+ students in family`
   if (tierSize === 1) return '1 student in family'
   return `${tierSize} students in family`
+}
+
+function fmtDiscountPct(pct) {
+  if (pct === null || pct === undefined || !Number.isFinite(Number(pct))) return ''
+  // Render with one decimal when needed; integer when whole.
+  const n = Number(pct)
+  if (n === 0) return '0%'
+  if (Math.abs(n - Math.round(n)) < 0.05) return `${Math.round(n)}%`
+  return `${n.toFixed(1)}%`
 }
 
 // Single inline editor for the per-student rate cell.
@@ -122,10 +138,14 @@ function TierRatesSection({
 }) {
   const [editingTierSize, setEditingTierSize] = useState(null)
 
-  // Derive max tier_size for "is highest" label rendering.
   const maxTierSize = tierRates.length > 0
     ? Math.max(...tierRates.map((t) => Number(t.tier_size) || 0))
     : 0
+
+  const tier1Rate = (() => {
+    const tier1 = tierRates.find((t) => Number(t.tier_size) === 1)
+    return tier1 ? Number(tier1.per_student_rate) || 0 : 0
+  })()
 
   function handleSaveRate(tierSize, newRate) {
     const next = tierRates.map((t) =>
@@ -147,30 +167,32 @@ function TierRatesSection({
       ...tierRates,
       {
         tier_size: nextSize,
-        per_student_rate: lastRate,  // sensible starting point — copy the previous tier
+        per_student_rate: lastRate,
         applies_when_n_students: nextSize,
       },
     ])
     onChangeFamilyDistribution([
       ...familyDistribution,
-      { tier_size: nextSize, family_count: 0 },
+      { tier_size: nextSize, breakdown_pct: 0, family_count: 0 },
     ])
   }
 
   function handleRemoveTier(tierSize) {
     if (readOnly) return
-    if (Number(tierSize) === 1) return  // Tier 1 not removable
+    if (Number(tierSize) === 1) return
 
     const tierRow = tierRates.find((t) => Number(t.tier_size) === Number(tierSize))
     const distRow = familyDistribution.find((d) => Number(d.tier_size) === Number(tierSize))
     const hasNonZeroRate = tierRow && Number(tierRow.per_student_rate) !== 0
-    const hasNonZeroFamilies = distRow && Number(distRow.family_count) !== 0
+    const hasNonZeroBreakdown = distRow && (
+      Number(distRow.breakdown_pct) !== 0 || Number(distRow.family_count) !== 0
+    )
 
-    if (hasNonZeroRate || hasNonZeroFamilies) {
+    if (hasNonZeroRate || hasNonZeroBreakdown) {
       const ok = window.confirm(
         `Remove the ${tierSize}-student tier? It currently has ` +
         `${hasNonZeroRate ? `a rate of ${fmtUsd(tierRow.per_student_rate)}` : 'no rate'} and ` +
-        `${hasNonZeroFamilies ? `${distRow.family_count} projected families` : 'no projected families'}. ` +
+        `${hasNonZeroBreakdown ? `a non-zero projected breakdown` : 'no projected breakdown'}. ` +
         'This cannot be undone (you can re-add the tier and re-enter values).'
       )
       if (!ok) return
@@ -184,9 +206,6 @@ function TierRatesSection({
 
   return (
     <section className="mb-8">
-      {/* Tier 1 section header — Cinzel 17px navy with gold border-bottom,
-          matching BudgetDetailZone's TopGroup treatment per architecture
-          §10.4 (in-app extension v3.6). */}
       <div className="flex items-center gap-3 px-2 py-3 border-b-2 border-gold/60 mb-2">
         <span className="font-display text-navy text-[17px] tracking-[0.08em] uppercase flex-1">
           Tier rates
@@ -198,13 +217,16 @@ function TierRatesSection({
       </p>
 
       <div className="px-2">
-        {/* Column headers — Tier 3 weight (medium navy 13.5px) */}
+        {/* Column headers — Tier 1 row uses BASE badge, others numeric. */}
         <div className="flex items-center gap-3 pr-3 py-1.5 border-b-[0.5px] border-card-border/60">
           <span className="font-body font-medium text-navy text-[12px] tracking-wider uppercase w-12 flex-shrink-0">
             Tier
           </span>
           <span className="font-body font-medium text-navy text-[12px] tracking-wider uppercase flex-1 min-w-0">
             Family size
+          </span>
+          <span className="font-body font-medium text-navy text-[12px] tracking-wider uppercase w-20 flex-shrink-0 text-right">
+            Discount
           </span>
           <span className="font-body font-medium text-navy text-[12px] tracking-wider uppercase w-32 flex-shrink-0 text-right">
             Per-student rate
@@ -222,19 +244,40 @@ function TierRatesSection({
           const tierSize = Number(tier.tier_size)
           const rate = Number(tier.per_student_rate) || 0
           const isHighest = tierSize === maxTierSize
-          const editing = editingTierSize === tierSize
           const isTier1 = tierSize === 1
+          const editing = editingTierSize === tierSize
+          const discountPct = isTier1 ? null : tierDiscountPct(rate, tier1Rate)
 
           return (
             <div
               key={tier.tier_size}
               className="flex items-center gap-3 pr-3 py-1.5 border-b-[0.5px] border-card-border hover:bg-cream-highlight/40"
             >
-              <span className="font-body tabular-nums text-[12px] text-muted w-12 flex-shrink-0">
-                {idx + 1}
+              {/* Tier column. Tier 1 → BASE badge; others → numeric. */}
+              <span className="w-12 flex-shrink-0 flex items-center">
+                {isTier1 ? (
+                  <span
+                    className="inline-block bg-gold/15 text-gold-darker font-display text-[10px] tracking-[0.12em] uppercase px-1.5 py-0.5 rounded"
+                    style={{ color: '#8C5410' }}
+                    aria-label="Base tier"
+                    title="Base tier — the reference rate for computing per-tier discounts."
+                  >
+                    Base
+                  </span>
+                ) : (
+                  <span className="font-body tabular-nums text-[12px] text-muted">
+                    {idx + 1}
+                  </span>
+                )}
               </span>
+
               <span className="font-body text-[13px] text-navy/85 flex-1 min-w-0 truncate">
                 {tierLabel(tierSize, isHighest)}
+              </span>
+
+              {/* Discount column — muted italic, computed read-only. */}
+              <span className="font-body italic text-muted text-[12px] tabular-nums w-20 flex-shrink-0 text-right">
+                {isTier1 ? '' : fmtDiscountPct(discountPct)}
               </span>
 
               {/* Per-student rate cell. Click to edit (parallel to
@@ -261,8 +304,6 @@ function TierRatesSection({
                 </button>
               )}
 
-              {/* Remove icon — disabled / hidden for Tier 1 and in
-                  read-only mode. */}
               <span className="w-8 flex-shrink-0 flex items-center justify-end">
                 {!readOnly && !isTier1 && (
                   <button

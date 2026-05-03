@@ -8,9 +8,13 @@
 //
 // Tier shape: four rows (1 / 2 / 3 / 4+ students per family) is the
 // Libertas convention; the schema's tier_count stores 4 by default.
-// `applies_when_n_students` is a forward-compat field for future
-// generalization (e.g., a school that wants tier 3 to apply to
-// 3-or-more rather than exactly 3); for B1 it equals tier_size.
+//
+// v3.8.2 (B1.1) reshapes estimated_family_distribution to include
+// breakdown_pct alongside family_count. Fresh-state default: every
+// row at zero. The user enters total_students + breakdown_pct values
+// from there; family_count is derived application-side and written
+// back to the jsonb on save so downstream reads (snapshots, KPIs)
+// have it without recomputation.
 
 export function defaultTierRates() {
   return [
@@ -23,9 +27,9 @@ export function defaultTierRates() {
 
 export function defaultFamilyDistribution() {
   return [
-    { tier_size: 1, family_count: 0 },
-    { tier_size: 2, family_count: 0 },
-    { tier_size: 3, family_count: 0 },
-    { tier_size: 4, family_count: 0 },
+    { tier_size: 1, breakdown_pct: 0, family_count: 0 },
+    { tier_size: 2, breakdown_pct: 0, family_count: 0 },
+    { tier_size: 3, breakdown_pct: 0, family_count: 0 },
+    { tier_size: 4, breakdown_pct: 0, family_count: 0 },
   ]
 }

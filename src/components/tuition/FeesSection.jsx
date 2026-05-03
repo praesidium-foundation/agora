@@ -148,17 +148,19 @@ function FeesSection({
 
   return (
     <section className="mb-8">
-      {/* Tier 1 section header */}
+      {/* Tier 1 section header. v3.8.2 (B1.1): renamed "Per-student fees"
+          → "Tuition fees" since the Before & After School Care line is
+          hourly, not per-student. */}
       <div className="flex items-center gap-3 px-2 py-3 border-b-2 border-gold/60 mb-2">
         <span className="font-display text-navy text-[17px] tracking-[0.08em] uppercase flex-1">
-          Per-student fees
+          Tuition fees
         </span>
       </div>
 
       <p className="font-body italic text-muted text-[12px] mb-3 px-2">
-        Curriculum fees and enrollment fees roll into Budget revenue. The
-        Before &amp; After School Care hourly rate applies to the actual
-        hours captured at audit (Stage 2).
+        Curriculum fees and enrollment fees roll into Budget revenue per
+        enrolled student. The Before &amp; After School Care hourly rate
+        applies to the actual hours captured at audit (Stage 2).
       </p>
 
       <div className="px-2">
