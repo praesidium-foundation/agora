@@ -139,9 +139,8 @@ function ProjectedEnrollmentSection({
 
       <p className="font-body italic text-muted text-[12px] mb-4 px-2 leading-relaxed">
         Project total enrollment for the academic year. Total students drives
-        every downstream calculation — tier-blended tuition, fee revenue, B&amp;A
-        revenue, and discount projections. Stage 2 audit captures actual
-        enrollment.
+        every downstream calculation — tier-blended tuition, fee revenue, and
+        discount projections. Stage 2 audit captures actual enrollment.
       </p>
 
       <div className="px-2">
