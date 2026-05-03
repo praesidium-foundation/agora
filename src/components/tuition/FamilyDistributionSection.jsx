@@ -8,8 +8,9 @@ import {
   topTierSize,
 } from '../../lib/tuitionMath'
 
-// Projected Family Distribution section — Stage 1 projection model
-// (architecture §7.3, rewritten in v3.8.2 / B1.1).
+// Projected Family Distribution section — Stage 1 distribution model
+// (architecture §7.3, rewritten in v3.8.2 / B1.1; section ordering
+// updated v3.8.6 / B1.5).
 //
 // Reframe from B1: instead of "input family counts directly," the
 // user enters total_students plus per-tier breakdown percentages, and
@@ -17,6 +18,14 @@ import {
 // students-per-family. The user can override total_families if their
 // projection is more specific than the derived value; an "↻" revert
 // button next to total_families clears the override.
+//
+// v3.8.6 (B1.5) relocates the Total students INPUT to the page-leading
+// Projected Enrollment section. This section now renders Total
+// students as a read-only display only — value mirrors what the user
+// entered above. Total families (override + revert), the breakdown
+// table, the top-tier average input, and the reconciliation indicator
+// remain editable here unchanged. Single source of truth for editing
+// total_students lives in ProjectedEnrollmentSection.jsx.
 //
 // Top-tier "X+" handling: a "4+" tier may include families with 4, 5,
 // or more students. Below the breakdown table, a single
@@ -35,10 +44,9 @@ import {
 //   distribution                       — array of { tier_size, breakdown_pct, family_count }
 //   tierRates                          — array of { tier_size, ... }; source of truth for tier shape
 //                                        (used for top-tier detection in the avg-students input)
-//   totalStudents                      — number | null
+//   totalStudents                      — number | null  (display only as of v3.8.6)
 //   totalFamilies                      — number | null  (stored override OR derived snapshot)
 //   topTierAvgStudentsPerFamily        — number | null
-//   onChangeTotalStudents               (next) => void
 //   onChangeTotalFamilies               (next, isOverride: boolean) => void
 //                                        — isOverride=false means "derived; clear any override"
 //                                        — isOverride=true means "explicit override"
@@ -51,6 +59,12 @@ import {
 //   onChangeTopTierAvgStudentsPerFamily (next | null) => void
 //                                        — null clears the override
 //   readOnly                           — boolean
+//
+// Removed in v3.8.6 / B1.5:
+//   onChangeTotalStudents — Total students editing moved to
+//   ProjectedEnrollmentSection. The page composition layer
+//   (TuitionConfigurationZone) wires the same `total_students` save
+//   handler into the new section instead.
 
 const int0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
 function fmtInt(n) {
@@ -214,13 +228,16 @@ function FamilyDistributionSection({
   totalStudents,
   totalFamilies,
   topTierAvgStudentsPerFamily,
-  onChangeTotalStudents,
   onChangeTotalFamilies,
   onChangeDistribution,
   onChangeTopTierAvgStudentsPerFamily,
   readOnly = false,
 }) {
-  const [editingField, setEditingField] = useState(null)        // 'total_students' | 'total_families' | 'top_tier_avg' | null
+  // v3.8.6: 'total_students' removed from the editingField state set
+  // — Total students is now a read-only display in this section
+  // (editing moved to ProjectedEnrollmentSection). 'total_families'
+  // and 'top_tier_avg' editing remains here unchanged.
+  const [editingField, setEditingField] = useState(null)        // 'total_families' | 'top_tier_avg' | null
   const [editingTierPct, setEditingTierPct] = useState(null)    // tier_size of currently-edited row | null
 
   // Local buffer for breakdown_pct edits. Mirrors `distribution`
@@ -302,11 +319,11 @@ function FamilyDistributionSection({
       : (top || 0)
 
   // ---- handlers -------------------------------------------------------
-
-  function handleSaveTotalStudents(value) {
-    setEditingField(null)
-    onChangeTotalStudents(value)
-  }
+  //
+  // v3.8.6: handleSaveTotalStudents removed — Total students editing
+  // lives in ProjectedEnrollmentSection. The page composition layer
+  // wires the same total_students save handler into the new section
+  // instead of this one.
 
   function handleSaveTotalFamiliesOverride(value) {
     setEditingField(null)
@@ -355,42 +372,28 @@ function FamilyDistributionSection({
       </div>
 
       <p className="font-body italic text-muted text-[12px] mb-4 px-2 leading-relaxed">
-        Project total enrollment for the academic year, then distribute across
-        family sizes. Family counts derive from the breakdown; override Total
-        families if you have a more specific projection.
+        Distribute projected enrollment across family sizes. Family counts
+        derive from the breakdown percentages; override Total families if you
+        have a more specific projection. Total students is set in the Projected
+        Enrollment section above.
       </p>
 
       <div className="px-2">
         {/* ---- Top inputs ---- */}
         <div className="space-y-2 mb-4 pb-4 border-b-[0.5px] border-card-border/60">
-          {/* Total students */}
+          {/* Total students — read-only display as of v3.8.6 / B1.5.
+              Edit path lives in ProjectedEnrollmentSection above. The
+              value mirrors what the user entered there; em-dash when
+              null. Renders identically in all states (drafting,
+              pending_lock_review, locked) since it is no longer an
+              input. */}
           <div className="flex items-center gap-3 pr-3 py-1.5">
             <span className="font-body text-[13px] text-navy/85 flex-1 min-w-0">
               Total students
             </span>
-            {readOnly ? (
-              <span className="text-right tabular-nums px-2 py-1 font-body text-[13px] w-32 flex-shrink-0 text-navy/85">
-                {fmtInt(totalStudents)}
-              </span>
-            ) : editingField === 'total_students' ? (
-              <ScalarEditor
-                initial={totalStudents}
-                parser={parseInt0}
-                onSave={handleSaveTotalStudents}
-                onCancel={() => setEditingField(null)}
-                ariaLabel="Total students"
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() => setEditingField('total_students')}
-                className="text-right tabular-nums px-2 py-1 rounded font-body text-[13px] w-32 flex-shrink-0 bg-white border-[0.5px] border-card-border cursor-text hover:border-navy/40 hover:bg-cream-highlight/40 transition-colors text-navy/85"
-                aria-label="Edit total students"
-                title="Click to edit"
-              >
-                {fmtInt(totalStudents)}
-              </button>
-            )}
+            <span className="text-right tabular-nums px-2 py-1 font-body text-[13px] w-32 flex-shrink-0 text-navy/85">
+              {fmtInt(totalStudents)}
+            </span>
           </div>
 
           {/* Total families — derived OR overridden */}

@@ -1,3 +1,4 @@
+import ProjectedEnrollmentSection from './ProjectedEnrollmentSection'
 import TierRatesSection from './TierRatesSection'
 import FeesSection from './FeesSection'
 import ProjectedDiscountsSection from './ProjectedDiscountsSection'
@@ -27,6 +28,13 @@ import FamilyDistributionSection from './FamilyDistributionSection'
 //   4. Family Distribution full reframe — total_students + total_families
 //      pair at top, breakdown_pct column, top-tier-avg-students input
 //      below the table.
+//
+// v3.8.6 (B1.5): Projected Enrollment promoted to a dedicated page-
+// leading section above Tier Rates. Total students input relocated
+// from inside Family Distribution to the new section, rendered with
+// bold typography. Family Distribution retains a read-only display
+// of Total students for section self-containment; editing happens
+// exclusively in ProjectedEnrollmentSection.
 //
 // Field saves flow up via per-field onChange callbacks. The parent
 // page (TuitionWorksheet.jsx) owns the Supabase write + toast on
@@ -73,6 +81,17 @@ function TuitionConfigurationZone({
 
   return (
     <div className="px-2 py-2">
+      {/* v3.8.6 (B1.5): Projected Enrollment is the page-leading
+          section. Total students drives every downstream computation;
+          placing it first matches operational reality (the school
+          projects enrollment first, then sets per-student rates,
+          then layers discounts). */}
+      <ProjectedEnrollmentSection
+        totalStudents={scenario.total_students}
+        onChangeTotalStudents={(v) => onUpdateField('total_students', v)}
+        readOnly={readOnly}
+      />
+
       <TierRatesSection
         tierRates={tierRates}
         familyDistribution={distribution}
@@ -111,7 +130,6 @@ function TuitionConfigurationZone({
         totalStudents={scenario.total_students}
         totalFamilies={scenario.total_families}
         topTierAvgStudentsPerFamily={scenario.top_tier_avg_students_per_family}
-        onChangeTotalStudents={(v) => onUpdateField('total_students', v)}
         onChangeTotalFamilies={onUpdateTotalFamilies}
         onChangeDistribution={onUpdateFamilyDistribution}
         onChangeTopTierAvgStudentsPerFamily={(v) => onUpdateField('top_tier_avg_students_per_family', v)}
