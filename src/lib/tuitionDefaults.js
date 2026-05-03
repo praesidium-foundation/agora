@@ -16,12 +16,16 @@
 // back to the jsonb on save so downstream reads (snapshots, KPIs)
 // have it without recomputation.
 
+// v3.8.9 (Tuition-B1.6): each row gains a discount_pct field. Seed
+// at 0 — fresh scenarios start with no tier discount; the user
+// enters real discount values which cascade per_student_rate
+// computation via tuitionMath.computePerStudentRateFromDiscount.
 export function defaultTierRates() {
   return [
-    { tier_size: 1, per_student_rate: 0, applies_when_n_students: 1 },
-    { tier_size: 2, per_student_rate: 0, applies_when_n_students: 2 },
-    { tier_size: 3, per_student_rate: 0, applies_when_n_students: 3 },
-    { tier_size: 4, per_student_rate: 0, applies_when_n_students: 4 },
+    { tier_size: 1, per_student_rate: 0, discount_pct: 0, applies_when_n_students: 1 },
+    { tier_size: 2, per_student_rate: 0, discount_pct: 0, applies_when_n_students: 2 },
+    { tier_size: 3, per_student_rate: 0, discount_pct: 0, applies_when_n_students: 3 },
+    { tier_size: 4, per_student_rate: 0, discount_pct: 0, applies_when_n_students: 4 },
   ]
 }
 

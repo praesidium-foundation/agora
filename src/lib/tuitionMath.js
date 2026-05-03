@@ -113,11 +113,40 @@ export function applyDerivedFamilyCounts(distribution, totalFamilies) {
 // Tier Rates section. Tier 1 is the base; returns null for it (UI
 // renders empty cell). Other tiers return ((tier1 - thisTier) /
 // tier1) × 100.
+//
+// v3.8.9 (Tuition-B1.6) note: the editability flip makes
+// discount_pct an explicit stored field on each tier_rates row.
+// The new computePerStudentRateFromDiscount helper below is the
+// inverse — used by the save path cascade. tierDiscountPct stays
+// for any consumer that wants to recompute from rates (e.g.,
+// downstream code that does not yet read the stored discount_pct
+// field).
 export function tierDiscountPct(tierRate, tier1Rate) {
   const t1 = Number(tier1Rate) || 0
   const tr = Number(tierRate) || 0
   if (t1 <= 0) return null
   return ((t1 - tr) / t1) * 100
+}
+
+// v3.8.9 (Tuition-B1.6): inverse of tierDiscountPct — compute the
+// per-student rate from a base rate and a discount percentage.
+// Used by the Tier Rates section save-path cascade:
+//   - Editing tier 1 per_student_rate → for each tier 2+, compute
+//     new per_student_rate from new base × stored discount_pct.
+//   - Editing a tier 2+ discount_pct → compute new per_student_rate
+//     for that tier from base × new discount_pct.
+//
+// Math: Math.round(baseRate × (1 − discountPct/100)). Rounded to
+// whole dollars to match the user's mental model (per-student
+// rates are always quoted in whole dollars at Libertas) and to
+// keep the stored value identical to what the user sees rendered.
+//
+// Returns null when either input is null / non-finite — strict
+// null propagation per the v3.8.x convention.
+export function computePerStudentRateFromDiscount(baseRate, discountPct) {
+  if (baseRate == null || !Number.isFinite(Number(baseRate))) return null
+  if (discountPct == null || !Number.isFinite(Number(discountPct))) return null
+  return Math.round(Number(baseRate) * (1 - Number(discountPct) / 100))
 }
 
 // ============================================================================
