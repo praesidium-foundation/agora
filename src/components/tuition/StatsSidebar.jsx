@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { formatCurrency } from '../../lib/format'
+import { formatCurrency, formatPercent } from '../../lib/format'
 
 // Data-driven stats sidebar. Right-side placement and visual treatment
 // mirror Budget's KpiSidebar exactly (architecture §8.1) — navy panel
@@ -35,6 +35,14 @@ import { formatCurrency } from '../../lib/format'
 //                                                          parens automatically without this flag.
 //                                                          Per architecture §10.4 accounting
 //                                                          parentheses convention.
+//     customSublabelNode?: ReactNode                    — when present (v3.8.7), replaces the
+//                                                          standard text sublabel with a custom
+//                                                          render slot. Used by the Net Education
+//                                                          Program Ratio stat to render the
+//                                                          comparator dropdown + inline manual
+//                                                          amount input. The standard sublabel
+//                                                          / subtitle text is ignored when
+//                                                          customSublabelNode is set.
 //   }>
 //   collapsed:         boolean                          — controlled
 //   onCollapseChange: (next: boolean) => void
@@ -58,6 +66,10 @@ const pct1 = new Intl.NumberFormat('en-US', {
 // v3.8.4: currency values route through formatCurrency for the
 // universal parens convention (§10.4). Other formats keep their
 // inline formatters.
+//
+// v3.8.7: percent values route through formatPercent for the same
+// parens convention — negative ratios render with parens (e.g.,
+// Net Ed Program Ratio of -0.85 → "(85.0%)").
 function formatValue(value, format, { subtractive = false } = {}) {
   if (value === null || value === undefined) return '—'
   if (format === 'currency') {
@@ -65,12 +77,14 @@ function formatValue(value, format, { subtractive = false } = {}) {
     // applies parens for either subtractive=true OR negative value.
     return formatCurrency(value, { subtractive })
   }
+  if (format === 'percent') {
+    return formatPercent(value, { subtractive })
+  }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return format === 'text' ? String(value) : '—'
   }
   switch (format) {
     case 'integer':  return int0.format(value)
-    case 'percent':  return pct1.format(value)
     case 'ratio':    return value.toFixed(3)
     case 'text':     return String(value)
     default:         return String(value)
@@ -99,7 +113,7 @@ function StatusPill({ status }) {
   )
 }
 
-function Stat({ label, value, format, subtitle, sublabel, status, target, comparison, emphasized, subtractive }) {
+function Stat({ label, value, format, subtitle, sublabel, status, target, comparison, emphasized, subtractive, customSublabelNode }) {
   // Optional target line — only renders when target is supplied. Tuition-C
   // surface; B1 never passes a target.
   const targetLine =
@@ -107,10 +121,11 @@ function Stat({ label, value, format, subtitle, sublabel, status, target, compar
       ? `Target: ${formatValue(target, format, { subtractive })}`
       : null
 
-  // Subtitle line precedence: explicit subtitle/sublabel wins; otherwise
-  // target (when present) renders. v3.8.3 introduces `sublabel` as the
-  // preferred name; `subtitle` stays as a back-compat alias.
-  const subLine = sublabel || subtitle || targetLine
+  // Subtitle line precedence: customSublabelNode (v3.8.7) wins absolutely;
+  // otherwise explicit sublabel/subtitle text; otherwise target (when
+  // present). v3.8.3 introduces `sublabel` as the preferred text name;
+  // `subtitle` stays as a back-compat alias.
+  const subText = sublabel || subtitle || targetLine
 
   // v3.8.3: emphasized stat renders the value at ~1.15× the standard
   // 18px size. Surfaces Net Projected Ed Program Revenue visually
@@ -127,11 +142,19 @@ function Stat({ label, value, format, subtitle, sublabel, status, target, compar
       <div className={`font-display ${valueSizeClass} text-white tabular-nums leading-tight`}>
         {formatValue(value, format, { subtractive })}
       </div>
-      {subLine && (
-        <div className="font-body italic text-[11px] text-white/50 leading-tight">
-          {subLine}
+      {customSublabelNode ? (
+        // v3.8.7 custom sublabel slot — used by the Net Ed Program
+        // Ratio stat to render the comparator dropdown + inline
+        // manual amount input. The slot inherits the parent's
+        // sublabel-area font sizing via descendants.
+        <div className="font-body text-[11px] text-white/50 leading-tight">
+          {customSublabelNode}
         </div>
-      )}
+      ) : subText ? (
+        <div className="font-body italic text-[11px] text-white/50 leading-tight">
+          {subText}
+        </div>
+      ) : null}
       {status && (
         <div className="pt-0.5">
           <StatusPill status={status} />
@@ -219,6 +242,7 @@ function StatsSidebar({ stats = [], collapsed, onCollapseChange }) {
               comparison={s.comparison}
               emphasized={s.emphasized}
               subtractive={s.subtractive}
+              customSublabelNode={s.customSublabelNode}
             />
           ))}
         </div>

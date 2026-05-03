@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/AuthProvider'
@@ -13,7 +13,10 @@ import {
   computeProjectedEdProgramRevenue,
   sumTotalProjectedDiscounts,
   computeNetProjectedEdProgramRevenue,
+  computeNetEdProgramRatio,
+  computeBreakevenEnrollment,
 } from '../../lib/tuitionMath'
+import { formatCurrency } from '../../lib/format'
 import AppShell from '../../components/AppShell'
 import AYESelector from '../../components/AYESelector'
 import Breadcrumb from '../../components/Breadcrumb'
@@ -85,6 +88,160 @@ function ActionButton({ label, disabled, primary, onClick, title }) {
     >
       {label}
     </button>
+  )
+}
+
+// v3.8.7 (Tuition-C): format a Budget snapshot into a human-readable
+// source label for the expense comparator's sublabel area. Examples:
+//   ('AYE 2025', 'final')        → 'AYE 2025 Final Budget'
+//   ('AYE 2025', 'preliminary')  → 'AYE 2025 Preliminary Budget'
+//   ('AYE 2026', 'reforecast')   → 'AYE 2026 Reforecast Budget'
+// The mapping uses the stage_type code; 'final' and 'preliminary' are
+// the only types Libertas seeds today (Migration 010), but the
+// formatter is permissive about future types.
+function formatBudgetSourceLabel(aye, stageType) {
+  if (!aye) return null
+  const stageLabel = stageType === 'final'
+    ? 'Final'
+    : stageType === 'preliminary'
+      ? 'Preliminary'
+      : stageType
+        ? stageType.charAt(0).toUpperCase() + stageType.slice(1)
+        : ''
+  return stageLabel ? `${aye} ${stageLabel} Budget` : `${aye} Budget`
+}
+
+// v3.8.7 (Tuition-C): comparator control rendered inside the Net
+// Education Program Ratio stat's sublabel slot. Two visual modes:
+//   - 'locked_budget': dropdown + read-only "vs. {sourceLabel}" text
+//   - 'manual': dropdown + inline editable currency amount
+// Read-only state (non-drafting scenario) renders the dropdown as
+// plain text (no chevron), the amount as plain text. Stays inside
+// the white/50 italic-ish typography of the standard sublabel area.
+function ComparatorControl({
+  mode,
+  amount,
+  sourceLabel,
+  onModeChange,
+  onAmountChange,
+  readOnly,
+}) {
+  const [editingAmount, setEditingAmount] = useState(false)
+
+  if (readOnly) {
+    // Plain-text presentation in non-drafting states. The KPI math
+    // still uses the stored amount; the user just can not change it
+    // here.
+    const modeText = mode === 'manual' ? 'Manual estimate' : (sourceLabel || 'no locked Budget available')
+    const amountText = amount != null ? formatCurrency(amount) : null
+    return (
+      <span className="italic">
+        vs. {modeText}{amountText && mode === 'manual' ? ` ${amountText}` : ''}
+      </span>
+    )
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      <select
+        value={mode}
+        onChange={(e) => onModeChange(e.target.value)}
+        aria-label="Comparator source"
+        className="bg-navy/40 text-white/85 border-[0.5px] border-white/15 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:border-white/40 cursor-pointer"
+      >
+        <option value="locked_budget" className="text-navy">Latest locked Budget</option>
+        <option value="manual" className="text-navy">Manual estimate</option>
+      </select>
+      <span className="italic">
+        vs.&nbsp;
+        {mode === 'locked_budget' ? (
+          sourceLabel || 'expense estimate (no locked Budget available)'
+        ) : (
+          <>
+            manual estimate&nbsp;
+            {editingAmount ? (
+              <ManualAmountEditor
+                initial={amount}
+                onSave={(v) => { onAmountChange(v); setEditingAmount(false) }}
+                onCancel={() => setEditingAmount(false)}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={() => setEditingAmount(true)}
+                className="font-body not-italic underline-offset-2 hover:underline text-white/85"
+                aria-label="Edit manual estimate"
+                title="Click to edit"
+              >
+                {amount != null ? formatCurrency(amount) : '—'}
+              </button>
+            )}
+          </>
+        )}
+      </span>
+    </span>
+  )
+}
+
+// Inline editor for the manual comparator amount. Same on-blur-saves
+// pattern as the rest of the page.
+function ManualAmountEditor({ initial, onSave, onCancel }) {
+  const [draft, setDraft] = useState(
+    initial === null || initial === undefined ? '' : String(initial)
+  )
+  const [error, setError] = useState(null)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
+  function commit() {
+    const s = String(draft ?? '').trim()
+    if (s === '') {
+      onSave(null)
+      return
+    }
+    const cleaned = s.replace(/[$,()\s]/g, '')
+    const n = Number(cleaned)
+    if (!Number.isFinite(n) || n < 0) {
+      setError('Amount must be a non-negative number')
+      return
+    }
+    onSave(n)
+  }
+
+  return (
+    <span className="inline-flex flex-col">
+      <input
+        ref={inputRef}
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          if (error) setError(null)
+        }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            onCancel()
+          }
+        }}
+        className="w-24 text-right bg-navy/40 text-white/85 border-[0.5px] border-white/40 rounded px-1 py-0.5 text-[11px] tabular-nums focus:outline-none focus:border-white"
+        aria-label="Manual estimate amount"
+      />
+      {error && (
+        <span className="text-status-red-bg text-[10px] italic mt-0.5">
+          {error}
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -354,7 +511,7 @@ function TuitionWorksheet() {
       supabase.from('academic_years').select('id, label').eq('id', ayeId).single(),
       supabase
         .from('tuition_worksheet_scenarios')
-        .select('id, scenario_label, description, is_recommended, state, created_at, locked_at, locked_by, locked_via, override_justification, tier_count, tier_rates, faculty_discount_pct, projected_faculty_discount_amount, projected_other_discount, projected_financial_aid, curriculum_fee_per_student, enrollment_fee_per_student, before_after_school_hourly_rate, projected_b_a_hours, projected_multi_student_discount, estimated_family_distribution, total_students, total_families, top_tier_avg_students_per_family, actual_before_after_school_hours, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
+        .select('id, scenario_label, description, is_recommended, state, created_at, locked_at, locked_by, locked_via, override_justification, tier_count, tier_rates, faculty_discount_pct, projected_faculty_discount_amount, projected_other_discount, projected_financial_aid, curriculum_fee_per_student, enrollment_fee_per_student, before_after_school_hourly_rate, projected_b_a_hours, projected_multi_student_discount, estimated_family_distribution, total_students, total_families, top_tier_avg_students_per_family, actual_before_after_school_hours, expense_comparator_mode, expense_comparator_amount, expense_comparator_source_label, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
         .eq('aye_id', ayeId)
         .eq('stage_id', stage.id)
         .order('created_at', { ascending: true }),
@@ -713,19 +870,150 @@ function TuitionWorksheet() {
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
 
+  // ---- expense comparator (v3.8.7 / Tuition-C) -------------------------
+  //
+  // Stage 1 KPIs (Net Education Program Ratio, Breakeven Enrollment)
+  // measure scenarios against an expense comparator the system fetches
+  // from the most recent locked Budget OR the user enters manually.
+  // The cart-and-horse problem (architecture §7.5: Tuition Planning
+  // happens before same-AYE Preliminary Budget) means same-AYE
+  // Preliminary is rarely available at planning time; the default
+  // comparator is the prior-AYE Final.
+  //
+  // Persistence: stored on the scenario row in three columns
+  // (expense_comparator_mode | _amount | _source_label). The page
+  // reads these columns on render and writes them via persistFields
+  // on dropdown change OR manual amount edit.
+  //
+  // Stale-detection: on scenario load with mode='locked_budget', the
+  // page silently fetches the latest locked Budget via
+  // get_latest_locked_budget_for_school. If the returned amount or
+  // source label differs from stored values, persistFields refreshes
+  // both columns. The change_log captures the drift for audit
+  // history; the user is not interrupted with a modal or banner.
+
+  const fetchLatestLockedBudget = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_latest_locked_budget_for_school', {
+      p_school_id: null,  // single-tenant; param ignored
+    })
+    if (error) {
+      // Silent failure path. The comparator stays at its stored
+      // value; KPIs render against whatever amount is on the row
+      // (may be null → em-dash).
+      console.warn('get_latest_locked_budget_for_school failed:', error.message)
+      return null
+    }
+    if (!data || data.length === 0) return null
+    const row = data[0]
+    return {
+      totalExpenses: row.total_expenses != null ? Number(row.total_expenses) : null,
+      sourceLabel: formatBudgetSourceLabel(row.aye, row.stage_type),
+    }
+  }, [])
+
+  // Stale-detection effect: on activeScenario change OR mode change,
+  // if mode='locked_budget', fetch the latest and refresh stored
+  // values if they differ. Dependencies are narrow (id + mode) to
+  // avoid re-firing on every persistFields update — amount/label
+  // changes that come from this same effect would otherwise loop.
+  useEffect(() => {
+    if (!activeScenario) return
+    if (activeScenario.expense_comparator_mode !== 'locked_budget') return
+
+    let cancelled = false
+    ;(async () => {
+      const latest = await fetchLatestLockedBudget()
+      if (cancelled) return
+      const newAmount = latest ? latest.totalExpenses : null
+      const newLabel = latest ? latest.sourceLabel : null
+      const currentAmount = activeScenario.expense_comparator_amount
+      const currentLabel = activeScenario.expense_comparator_source_label
+      // Compare numerically for amount (Number === Number); strict for label.
+      const amountChanged = (currentAmount == null) !== (newAmount == null)
+        || (currentAmount != null && newAmount != null && Number(currentAmount) !== Number(newAmount))
+      const labelChanged = currentLabel !== newLabel
+      if (amountChanged || labelChanged) {
+        await persistFields({
+          expense_comparator_amount: newAmount,
+          expense_comparator_source_label: newLabel,
+        })
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeScenario?.id, activeScenario?.expense_comparator_mode])
+
+  // Dropdown change handler. Atomically updates mode + amount + source
+  // label per the v3.8.7 spec.
+  const handleComparatorModeChange = useCallback(async (newMode) => {
+    if (newMode === 'locked_budget') {
+      const latest = await fetchLatestLockedBudget()
+      await persistFields({
+        expense_comparator_mode: 'locked_budget',
+        expense_comparator_amount: latest ? latest.totalExpenses : null,
+        expense_comparator_source_label: latest ? latest.sourceLabel : null,
+      })
+    } else if (newMode === 'manual') {
+      // Preserve existing amount; if null, try to seed from latest
+      // locked Budget so the manual input is not blank.
+      let nextAmount = activeScenario?.expense_comparator_amount
+      if (nextAmount == null) {
+        const latest = await fetchLatestLockedBudget()
+        nextAmount = latest ? latest.totalExpenses : null
+      }
+      await persistFields({
+        expense_comparator_mode: 'manual',
+        expense_comparator_amount: nextAmount,
+        expense_comparator_source_label: 'Manual estimate',
+      })
+    }
+  }, [activeScenario, fetchLatestLockedBudget, persistFields])
+
+  const handleComparatorAmountChange = useCallback(async (value) => {
+    await persistFields({
+      expense_comparator_amount: value,
+    })
+  }, [persistFields])
+
   // ---- stats (data-driven; direct sums in B1, computed KPIs in C) ------
 
-  // v3.8.3 (B1.2): six stats in spec order, with Net Projected Ed
-  // Program Revenue visually emphasized as the load-bearing operational
-  // KPI. All stats compute via tuitionMath helpers with null
+  // v3.8.7 (Tuition-C): seven stats in final spec order. Projected
+  // Families removed (not a Tuition Committee KPI by Jenna's framing);
+  // Projected Students renamed to Projected Enrollment and promoted to
+  // the leading position; Net Education Program Ratio (emphasized) and
+  // Breakeven Enrollment added at the foot. Net Education Program
+  // Ratio uses the customSublabelNode slot for the comparator
+  // dropdown + manual amount control.
+  //
+  // All stats compute via tuitionMath helpers with strict null
   // propagation — em-dashes for missing core inputs (total_students,
-  // tier rates, etc.) so a fresh scenario surfaces "not yet entered"
-  // honestly. The four-stream Total Projected Discounts now includes
-  // Multi-Student (computed from tier math) per the architecture §7.3
-  // "Stage 1 revenue vocabulary" subsection.
+  // tier rates, expense_comparator_amount) so a fresh scenario
+  // surfaces "not yet entered" honestly.
   const stats = useMemo(() => {
     if (!activeScenario) return []
+    const comparator = activeScenario.expense_comparator_amount
+
+    // ComparatorControl is a JSX node passed into the stat object
+    // via customSublabelNode. The Stat subcomponent renders it in
+    // place of the standard text sublabel.
+    const comparatorControl = (
+      <ComparatorControl
+        mode={activeScenario.expense_comparator_mode}
+        amount={comparator}
+        sourceLabel={activeScenario.expense_comparator_source_label}
+        onModeChange={handleComparatorModeChange}
+        onAmountChange={handleComparatorAmountChange}
+        readOnly={activeScenario.state !== 'drafting' || !canEdit}
+      />
+    )
+
     return [
+      {
+        key: 'projected_enrollment',
+        label: 'Projected Enrollment',
+        value: activeScenario.total_students != null ? Number(activeScenario.total_students) : null,
+        format: 'integer',
+      },
       {
         key: 'projected_gross_tuition',
         label: 'Projected Gross Tuition',
@@ -747,9 +1035,7 @@ function TuitionWorksheet() {
         value: sumTotalProjectedDiscounts(activeScenario),
         format: 'currency',
         // v3.8.4: always render parens per the universal accounting
-        // parentheses convention for subtractive currency values
-        // (architecture §10.4). Aligns the sidebar stat with the
-        // section's Total Projected Discounts subtotal row.
+        // parentheses convention for subtractive currency values.
         subtractive: true,
       },
       {
@@ -761,19 +1047,24 @@ function TuitionWorksheet() {
         emphasized: true,
       },
       {
-        key: 'projected_families',
-        label: 'Projected Families',
-        value: activeScenario.total_families != null ? Number(activeScenario.total_families) : null,
-        format: 'integer',
+        key: 'net_ed_program_ratio',
+        label: 'Net Education Program Ratio',
+        // Custom sublabel slot — comparator dropdown + manual amount
+        // input. The standard sublabel field is unused for this stat.
+        customSublabelNode: comparatorControl,
+        value: computeNetEdProgramRatio(activeScenario, comparator),
+        format: 'percent',
+        emphasized: true,
       },
       {
-        key: 'projected_students',
-        label: 'Projected Students',
-        value: activeScenario.total_students != null ? Number(activeScenario.total_students) : null,
+        key: 'breakeven_enrollment',
+        label: 'Breakeven Enrollment',
+        sublabel: 'Enrollment needed to break even at this tuition rate',
+        value: computeBreakevenEnrollment(activeScenario, comparator),
         format: 'integer',
       },
     ]
-  }, [activeScenario])
+  }, [activeScenario, canEdit, handleComparatorModeChange, handleComparatorAmountChange])
 
   // ---- render branches -------------------------------------------------
 

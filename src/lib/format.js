@@ -73,3 +73,30 @@ export function formatInteger(value) {
   if (!Number.isFinite(n)) return '—'
   return int0.format(n)
 }
+
+// Percentage formatter with the same parens convention as
+// formatCurrency (architecture §10.12).
+//
+// Input: a decimal ratio. 1.021 → "102.1%", 0.85 → "85.0%".
+// Negative ratios render with parens regardless of `subtractive`:
+// -0.85 → "(85.0%)". The leading minus sign is never rendered.
+//
+// options.precision — number of decimal places. Default 1.
+// options.subtractive — when true, always render with parens (rare for
+//   percentages; included for API symmetry with formatCurrency).
+//
+// Used for the Net Education Program Ratio sidebar stat (v3.8.7 /
+// Tuition-C) and any future percent-format stats.
+
+export function formatPercent(value, options = {}) {
+  const { precision = 1, subtractive = false } = options
+  if (value === null || value === undefined) return '—'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  const pct = Math.abs(n) * 100
+  const formatted = `${pct.toFixed(precision)}%`
+  if (subtractive || n < 0) {
+    return `(${formatted})`
+  }
+  return formatted
+}

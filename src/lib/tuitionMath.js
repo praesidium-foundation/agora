@@ -313,3 +313,127 @@ export function computeTuitionFeesSubtotal(scenario) {
   if (fees == null && ba == null) return null
   return (fees ?? 0) + (ba ?? 0)
 }
+
+// ============================================================================
+// v3.8.7 (Tuition-C) — Stage 1 decision-support KPIs.
+//
+// Two KPIs the Tuition Committee uses to evaluate a scenario before
+// recommending it to the Board:
+//   - Net Education Program Ratio: Net Projected Ed Program Revenue
+//     divided by an expense comparator (latest locked Budget total
+//     expenses, OR a manual estimate). The 102%-of-expenses target
+//     lives here.
+//   - Breakeven Enrollment: given current tier rates, fees, B&A
+//     projections, and discount envelopes, the enrollment count
+//     required to match the expense comparator.
+//
+// Both depend on the per-scenario `expense_comparator_amount` column
+// (Migration 029). Both return null when the comparator is null,
+// when total_students is null/0, or when any required tier/fee data
+// is missing — consistent with B1.x null-propagation discipline.
+//
+// Architectural decision (carried over from v3.8.3 / B1.2): these
+// compute client-side via tuitionMath.js for instant feedback during
+// Stage 1 iteration. Server-side hoist into compute_tuition_scenario_
+// kpis is queued for Tuition-C+ when the RPC starts returning a
+// richer KPI bundle (cross-module dashboards, etc.) and the round-
+// trip cost amortizes across multiple KPIs.
+// ============================================================================
+
+// Per-student tier-blended rate. Pure helper pulled out so the
+// breakeven formula reads cleanly — the ratio of tier-blended tuition
+// to total students is the average per-student revenue net of the
+// multi-student discount, assuming the breakdown_pct distribution
+// holds as enrollment scales.
+//
+// Returns null when total_students is null/0 or tier-blended tuition
+// is null (no tier rates / no derived family counts).
+export function computeBlendedAvgPerStudentRate(scenario) {
+  const totalStudents = scenario?.total_students
+  if (totalStudents == null || !Number.isFinite(Number(totalStudents))) return null
+  const n = Number(totalStudents)
+  if (n <= 0) return null
+  const blended = computeTierBlendedTuition(scenario)
+  if (blended == null) return null
+  return blended / n
+}
+
+// Net Education Program Ratio: Net Projected Ed Program Revenue
+// divided by the expense comparator. Returns a decimal (e.g., 1.021
+// for 102.1%); the rendering layer formats as a percentage via
+// formatPercent.
+//
+// Returns null if Net Ed Program Revenue is null OR the comparator
+// is null OR the comparator is 0 (division by zero would be
+// meaningless and we want em-dash to surface "not yet measurable").
+export function computeNetEdProgramRatio(scenario, expenseComparator) {
+  const net = computeNetProjectedEdProgramRevenue(scenario)
+  if (net == null) return null
+  if (expenseComparator == null || !Number.isFinite(Number(expenseComparator))) return null
+  const denom = Number(expenseComparator)
+  if (denom === 0) return null
+  return net / denom
+}
+
+// Breakeven Enrollment forward solve, assuming the current
+// breakdown_pct distribution holds as enrollment scales.
+//
+// Math derivation (the formula's pieces all scale linearly in N
+// except the fixed-dollar discount envelopes):
+//
+//   gross_at_N         = base_rate × N                    (linear)
+//   tier_blended_at_N  = blended_avg_per_student × N      (linear)
+//   multi_student_at_N = N × (base_rate − blended_avg_per_student)
+//   fees_at_N          = (curriculum + enrollment) × N    (linear)
+//   ba_revenue_at_N    = (current_ba_revenue / total_students) × N    (linear)
+//   faculty + other + FA discounts                        (fixed envelopes; do not scale)
+//
+// Solving for N where revenue = expense_comparator + fixed_envelopes:
+//
+//   N × (blended_avg_per_student + per_student_fees + ba_per_student)
+//     = expense_comparator + fixed_envelopes
+//
+//   N = (expense_comparator + fixed_envelopes) /
+//       (blended_avg_per_student + per_student_fees + ba_per_student)
+//
+// Round up via Math.ceil — fractional students do not exist; the
+// floor would understate the requirement.
+//
+// Returns null when:
+//   - expense_comparator is null
+//   - total_students is null/0 (cannot compute per-student rates)
+//   - blended_avg_per_student is null (tier-blended math incomplete)
+//   - the per-student denominator is 0 (would divide by zero)
+export function computeBreakevenEnrollment(scenario, expenseComparator) {
+  if (expenseComparator == null || !Number.isFinite(Number(expenseComparator))) return null
+  const totalStudents = scenario?.total_students
+  if (totalStudents == null || !Number.isFinite(Number(totalStudents))) return null
+  const n = Number(totalStudents)
+  if (n <= 0) return null
+
+  const blendedPerStudent = computeBlendedAvgPerStudentRate(scenario)
+  if (blendedPerStudent == null) return null
+
+  const curriculum = Number(scenario?.curriculum_fee_per_student) || 0
+  const enrollment = Number(scenario?.enrollment_fee_per_student) || 0
+  const perStudentFees = curriculum + enrollment
+
+  // B&A per student: scale current B&A revenue by enrollment ratio.
+  // If projected_b_a_hours or hourly rate are null, B&A revenue is
+  // null; treat as 0 contribution (a school may legitimately project
+  // zero B&A — we should not poison the breakeven formula).
+  const baRevenue = computeProjectedBARevenue(scenario) ?? 0
+  const baPerStudent = baRevenue / n
+
+  const denom = blendedPerStudent + perStudentFees + baPerStudent
+  if (denom <= 0) return null
+
+  // Fixed dollar envelopes — do not scale with enrollment.
+  const faculty = Number(scenario?.projected_faculty_discount_amount) || 0
+  const other = Number(scenario?.projected_other_discount) || 0
+  const fa = Number(scenario?.projected_financial_aid) || 0
+  const fixedEnvelopes = faculty + other + fa
+
+  const numer = Number(expenseComparator) + fixedEnvelopes
+  return Math.ceil(numer / denom)
+}
