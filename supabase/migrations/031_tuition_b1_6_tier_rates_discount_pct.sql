@@ -17,7 +17,7 @@
 --   - Tier 1 (lowest tier_size): discount_pct = 0 unconditionally
 --   - Tiers 2+: discount_pct = ROUND(((tier_1_rate - this_tier_rate)
 --     / tier_1_rate) × 100, 2) when tier_1_rate > 0; else 0
-//
+--
 -- Per-student rate values preserved verbatim during backfill — no
 -- rounding, no recomputation. The migration only adds the new
 -- field. Round-trip math (per_student_rate ↔ discount_pct ↔
