@@ -729,7 +729,7 @@ function TuitionWorksheet() {
       {
         key: 'projected_gross_tuition',
         label: 'Projected Gross Tuition',
-        sublabel: 'Total students × Tier 1 rate',
+        sublabel: 'Total students × Base rate',
         value: computeProjectedGrossAtTier1(activeScenario),
         format: 'currency',
       },
