@@ -887,20 +887,25 @@ function TuitionWorksheet() {
   //
   // Stale-detection: on scenario load with mode='locked_budget', the
   // page silently fetches the latest locked Budget via
-  // get_latest_locked_budget_for_school. If the returned amount or
-  // source label differs from stored values, persistFields refreshes
-  // both columns. The change_log captures the drift for audit
-  // history; the user is not interrupted with a modal or banner.
+  // get_latest_locked_budget. If the returned amount or source label
+  // differs from stored values, persistFields refreshes both columns.
+  // The change_log captures the drift for audit history; the user is
+  // not interrupted with a modal or banner.
+  //
+  // v3.8.8: RPC was renamed from get_latest_locked_budget_for_school
+  // and the unused school_id parameter dropped (Migration 030); the
+  // forward-compat scaffolding for multi-tenancy was misaligned with
+  // architecture §1 / CLAUDE.md guidance against pre-emptive multi-
+  // tenant scaffolding. When multi-tenancy lands, the RPC gets
+  // re-parameterized as part of that coordinated migration.
 
   const fetchLatestLockedBudget = useCallback(async () => {
-    const { data, error } = await supabase.rpc('get_latest_locked_budget_for_school', {
-      p_school_id: null,  // single-tenant; param ignored
-    })
+    const { data, error } = await supabase.rpc('get_latest_locked_budget')
     if (error) {
       // Silent failure path. The comparator stays at its stored
       // value; KPIs render against whatever amount is on the row
       // (may be null → em-dash).
-      console.warn('get_latest_locked_budget_for_school failed:', error.message)
+      console.warn('get_latest_locked_budget failed:', error.message)
       return null
     }
     if (!data || data.length === 0) return null
