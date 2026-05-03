@@ -1,4 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import {
+  computeProjectedFeeRevenue,
+  computeProjectedBARevenue,
+  computeTuitionFeesSubtotal,
+} from '../../lib/tuitionMath'
+import { formatCurrency } from '../../lib/format'
 
 // Tuition Fees section — fee fields per architecture §7.3 (renamed
 // from "Per-student fees" in v3.8.2; the Before & After School Care
@@ -19,7 +25,23 @@ import { useEffect, useRef, useState } from 'react'
 // captures actual hours, which lives on a different column
 // (actual_before_after_school_hours).
 //
+// v3.8.4 (B1.3) adds three subtotal rows clustered at the section
+// foot:
+//   - Per-Student Fees Subtotal: italic muted, no top rule
+//                                ((curriculum_fee + enrollment_fee)
+//                                 × total_students)
+//   - B&A Revenue Subtotal:      italic muted, no top rule
+//                                (b_a_hourly_rate × projected_b_a_hours)
+//   - Tuition Fees Subtotal:     bold, navy@25 thin top rule
+//                                (sum of the two above; null-handling
+//                                 per computeTuitionFeesSubtotal in
+//                                 tuitionMath.js)
+//
 // Props:
+//   scenario                               full scenario object (v3.8.4;
+//                                           used by the subtotal helpers
+//                                           for total_students and the
+//                                           projected_b_a_hours field)
 //   curriculumFee                          numeric
 //   enrollmentFee                          numeric
 //   beforeAfterSchoolHourlyRate            numeric
@@ -227,6 +249,7 @@ function FeeRow({ label, hint, value, format = 'usd0', editingKey, fieldKey, set
 }
 
 function FeesSection({
+  scenario,
   curriculumFee,
   enrollmentFee,
   beforeAfterSchoolHourlyRate,
@@ -239,6 +262,12 @@ function FeesSection({
 }) {
   const [editing, setEditing] = useState(null)
   const editingHours = editing === 'projected_ba_hours'
+
+  // v3.8.4 (B1.3) section subtotals. All three return null when their
+  // inputs are insufficient and the formatter renders em-dash.
+  const perStudentFeesSubtotal = scenario ? computeProjectedFeeRevenue(scenario) : null
+  const baRevenueSubtotal = scenario ? computeProjectedBARevenue(scenario) : null
+  const tuitionFeesSubtotal = scenario ? computeTuitionFeesSubtotal(scenario) : null
 
   return (
     <section className="mb-8">
@@ -326,6 +355,40 @@ function FeesSection({
               {fmtHoursDisplay(projectedBAHours)}
             </button>
           )}
+        </div>
+
+        {/* v3.8.4 (B1.3): three subtotal rows at the section foot. The
+            two component subtotals render in italic muted treatment
+            (no top rule) and indent slightly so they read as roll-ups
+            beneath the rows above. The grand subtotal renders flush
+            left, bold, with a navy@25 thin top rule. */}
+        <div className="mt-3">
+          <div className="flex items-center gap-3 pr-3 pl-4 py-1.5">
+            <span className="font-body italic text-muted text-[12.5px] flex-1 min-w-0">
+              Per-Student Fees Subtotal
+            </span>
+            <span className="text-right tabular-nums font-body italic text-muted text-[12.5px] w-32 flex-shrink-0">
+              {formatCurrency(perStudentFeesSubtotal)}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 pr-3 pl-4 py-1.5">
+            <span className="font-body italic text-muted text-[12.5px] flex-1 min-w-0">
+              B&amp;A Revenue Subtotal
+            </span>
+            <span className="text-right tabular-nums font-body italic text-muted text-[12.5px] w-32 flex-shrink-0">
+              {formatCurrency(baRevenueSubtotal)}
+            </span>
+          </div>
+          <div className="mt-1 pt-2 border-t-[0.5px] border-navy/25">
+            <div className="flex items-center gap-3 pr-3 py-2">
+              <span className="font-body font-semibold text-navy text-[13.5px] flex-1 min-w-0">
+                Tuition Fees Subtotal
+              </span>
+              <span className="text-right tabular-nums font-body font-semibold text-[13.5px] w-32 flex-shrink-0 text-navy">
+                {formatCurrency(tuitionFeesSubtotal)}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </section>

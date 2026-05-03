@@ -746,6 +746,11 @@ function TuitionWorksheet() {
         sublabel: 'Multi-Student + Faculty + Other + Financial Aid',
         value: sumTotalProjectedDiscounts(activeScenario),
         format: 'currency',
+        // v3.8.4: always render parens per the universal accounting
+        // parentheses convention for subtractive currency values
+        // (architecture §10.4). Aligns the sidebar stat with the
+        // section's Total Projected Discounts subtotal row.
+        subtractive: true,
       },
       {
         key: 'net_projected_ed_program_revenue',

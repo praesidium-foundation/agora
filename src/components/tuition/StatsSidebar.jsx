@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { formatCurrency } from '../../lib/format'
 
 // Data-driven stats sidebar. Right-side placement and visual treatment
 // mirror Budget's KpiSidebar exactly (architecture §8.1) — navy panel
@@ -27,6 +28,13 @@ import { useEffect, useState } from 'react'
 //     emphasized?: boolean                              — render value at ~1.15× standard typography
 //                                                          (v3.8.3 — used for Net Projected Ed Program
 //                                                          Revenue, the load-bearing operational KPI)
+//     subtractive?: boolean                             — currency-only (v3.8.4): always render the
+//                                                          value with parens, regardless of sign
+//                                                          (e.g., Total Projected Discounts).
+//                                                          Negative currency values render with
+//                                                          parens automatically without this flag.
+//                                                          Per architecture §10.4 accounting
+//                                                          parentheses convention.
 //   }>
 //   collapsed:         boolean                          — controlled
 //   onCollapseChange: (next: boolean) => void
@@ -47,13 +55,20 @@ const pct1 = new Intl.NumberFormat('en-US', {
   maximumFractionDigits: 1,
 })
 
-function formatValue(value, format) {
+// v3.8.4: currency values route through formatCurrency for the
+// universal parens convention (§10.4). Other formats keep their
+// inline formatters.
+function formatValue(value, format, { subtractive = false } = {}) {
   if (value === null || value === undefined) return '—'
+  if (format === 'currency') {
+    // formatCurrency handles its own null/non-finite cases and
+    // applies parens for either subtractive=true OR negative value.
+    return formatCurrency(value, { subtractive })
+  }
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return format === 'text' ? String(value) : '—'
   }
   switch (format) {
-    case 'currency': return usd0.format(value)
     case 'integer':  return int0.format(value)
     case 'percent':  return pct1.format(value)
     case 'ratio':    return value.toFixed(3)
@@ -84,12 +99,12 @@ function StatusPill({ status }) {
   )
 }
 
-function Stat({ label, value, format, subtitle, sublabel, status, target, comparison, emphasized }) {
+function Stat({ label, value, format, subtitle, sublabel, status, target, comparison, emphasized, subtractive }) {
   // Optional target line — only renders when target is supplied. Tuition-C
   // surface; B1 never passes a target.
   const targetLine =
     target !== undefined && target !== null && Number.isFinite(target)
-      ? `Target: ${formatValue(target, format)}`
+      ? `Target: ${formatValue(target, format, { subtractive })}`
       : null
 
   // Subtitle line precedence: explicit subtitle/sublabel wins; otherwise
@@ -110,7 +125,7 @@ function Stat({ label, value, format, subtitle, sublabel, status, target, compar
         {label}
       </div>
       <div className={`font-display ${valueSizeClass} text-white tabular-nums leading-tight`}>
-        {formatValue(value, format)}
+        {formatValue(value, format, { subtractive })}
       </div>
       {subLine && (
         <div className="font-body italic text-[11px] text-white/50 leading-tight">
@@ -203,6 +218,7 @@ function StatsSidebar({ stats = [], collapsed, onCollapseChange }) {
               target={s.target}
               comparison={s.comparison}
               emphasized={s.emphasized}
+              subtractive={s.subtractive}
             />
           ))}
         </div>

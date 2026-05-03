@@ -291,3 +291,25 @@ export function computeNetProjectedEdProgramRevenue(scenario) {
   if (gross == null || discounts == null) return null
   return gross - discounts
 }
+
+// ============================================================================
+// v3.8.4 (B1.3) — Tuition Fees grand subtotal.
+// ============================================================================
+
+// Tuition Fees Subtotal: Per-Student Fees Subtotal + B&A Revenue
+// Subtotal. Renders bold at the foot of the Tuition Fees section
+// alongside its two italic-muted component subtotals.
+//
+// Null-handling rule (v3.8.4 spec):
+//   - Both null → null (em-dash; section is "not yet projected")
+//   - One null, other has value → present value carries through
+//     (the section is partially populated, not unprojected; treating
+//     the missing component as zero is more honest than emitting null
+//     and losing the visible signal)
+//   - Both present → straight sum
+export function computeTuitionFeesSubtotal(scenario) {
+  const fees = computeProjectedFeeRevenue(scenario)
+  const ba = computeProjectedBARevenue(scenario)
+  if (fees == null && ba == null) return null
+  return (fees ?? 0) + (ba ?? 0)
+}

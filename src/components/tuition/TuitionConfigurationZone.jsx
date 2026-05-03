@@ -76,13 +76,13 @@ function TuitionConfigurationZone({
       <TierRatesSection
         tierRates={tierRates}
         familyDistribution={distribution}
-        scenario={scenario}
         onChangeTierRates={onUpdateTierRates}
         onChangeFamilyDistribution={onUpdateFamilyDistribution}
         readOnly={readOnly}
       />
 
       <FeesSection
+        scenario={scenario}
         curriculumFee={scenario.curriculum_fee_per_student}
         enrollmentFee={scenario.enrollment_fee_per_student}
         beforeAfterSchoolHourlyRate={scenario.before_after_school_hourly_rate}
@@ -95,6 +95,7 @@ function TuitionConfigurationZone({
       />
 
       <ProjectedDiscountsSection
+        scenario={scenario}
         projectedFacultyDiscountAmount={scenario.projected_faculty_discount_amount}
         projectedOtherDiscount={scenario.projected_other_discount}
         projectedFinancialAid={scenario.projected_financial_aid}
