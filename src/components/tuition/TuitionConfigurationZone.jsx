@@ -76,6 +76,7 @@ function TuitionConfigurationZone({
       <TierRatesSection
         tierRates={tierRates}
         familyDistribution={distribution}
+        scenario={scenario}
         onChangeTierRates={onUpdateTierRates}
         onChangeFamilyDistribution={onUpdateFamilyDistribution}
         readOnly={readOnly}
@@ -85,9 +86,11 @@ function TuitionConfigurationZone({
         curriculumFee={scenario.curriculum_fee_per_student}
         enrollmentFee={scenario.enrollment_fee_per_student}
         beforeAfterSchoolHourlyRate={scenario.before_after_school_hourly_rate}
+        projectedBAHours={scenario.projected_b_a_hours}
         onChangeCurriculumFee={(v) => onUpdateField('curriculum_fee_per_student', v)}
         onChangeEnrollmentFee={(v) => onUpdateField('enrollment_fee_per_student', v)}
         onChangeBeforeAfterSchoolHourlyRate={(v) => onUpdateField('before_after_school_hourly_rate', v)}
+        onChangeProjectedBAHours={(v) => onUpdateField('projected_b_a_hours', v)}
         readOnly={readOnly}
       />
 

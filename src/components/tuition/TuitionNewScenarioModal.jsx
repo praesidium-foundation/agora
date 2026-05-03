@@ -101,6 +101,13 @@ function TuitionNewScenarioModal({
         total_students:                      isCopy ? currentScenario.total_students                      : null,
         total_families:                      isCopy ? currentScenario.total_families                      : null,
         top_tier_avg_students_per_family:    isCopy ? currentScenario.top_tier_avg_students_per_family    : null,
+        // v3.8.3 (B1.2): two new columns. Copy carries source's
+        // at-save values forward; fresh starts at null. Either way,
+        // any subsequent edit on the new scenario goes through
+        // persistFields which recomputes projected_multi_student_
+        // discount against the post-edit state.
+        projected_b_a_hours:                 isCopy ? currentScenario.projected_b_a_hours                 : null,
+        projected_multi_student_discount:    isCopy ? currentScenario.projected_multi_student_discount    : null,
       }
 
       if (!insert.scenario_label) {

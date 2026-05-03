@@ -19,10 +19,14 @@ import { useEffect, useState } from 'react'
 //     label:      string                                — uppercase small-caps label
 //     value:      number | null | undefined             — null/undefined renders as "—"
 //     format:     'currency' | 'integer' | 'percent' | 'ratio' | 'text'
-//     subtitle?:  string                                — italic line below value
+//     subtitle?:  string                                — italic line below value (legacy alias for sublabel)
+//     sublabel?:  string                                — italic line below value (preferred name; v3.8.3)
 //     target?:    number                                — comparison reference (Tuition-C)
 //     comparison?: 'higher_better' | 'lower_better' | 'within_range'
 //     status?:    'ok' | 'warning' | 'alert'
+//     emphasized?: boolean                              — render value at ~1.15× standard typography
+//                                                          (v3.8.3 — used for Net Projected Ed Program
+//                                                          Revenue, the load-bearing operational KPI)
 //   }>
 //   collapsed:         boolean                          — controlled
 //   onCollapseChange: (next: boolean) => void
@@ -80,7 +84,7 @@ function StatusPill({ status }) {
   )
 }
 
-function Stat({ label, value, format, subtitle, status, target, comparison }) {
+function Stat({ label, value, format, subtitle, sublabel, status, target, comparison, emphasized }) {
   // Optional target line — only renders when target is supplied. Tuition-C
   // surface; B1 never passes a target.
   const targetLine =
@@ -88,16 +92,24 @@ function Stat({ label, value, format, subtitle, status, target, comparison }) {
       ? `Target: ${formatValue(target, format)}`
       : null
 
-  // Subtitle line precedence: explicit subtitle wins; otherwise target
-  // (when present) renders. Status pill renders on its own line below.
-  const subLine = subtitle || targetLine
+  // Subtitle line precedence: explicit subtitle/sublabel wins; otherwise
+  // target (when present) renders. v3.8.3 introduces `sublabel` as the
+  // preferred name; `subtitle` stays as a back-compat alias.
+  const subLine = sublabel || subtitle || targetLine
+
+  // v3.8.3: emphasized stat renders the value at ~1.15× the standard
+  // 18px size. Surfaces Net Projected Ed Program Revenue visually
+  // within the stats column without breaking the column's typography
+  // rhythm (the label and sublabel stay the same size; only the
+  // numeric value scales up).
+  const valueSizeClass = emphasized ? 'text-[21px]' : 'text-[18px]'
 
   return (
     <div className="space-y-0.5">
       <div className="font-body text-[10px] text-white/55 uppercase tracking-wider">
         {label}
       </div>
-      <div className="font-display text-[18px] text-white tabular-nums leading-tight">
+      <div className={`font-display ${valueSizeClass} text-white tabular-nums leading-tight`}>
         {formatValue(value, format)}
       </div>
       {subLine && (
@@ -186,9 +198,11 @@ function StatsSidebar({ stats = [], collapsed, onCollapseChange }) {
               value={s.value}
               format={s.format}
               subtitle={s.subtitle}
+              sublabel={s.sublabel}
               status={s.status}
               target={s.target}
               comparison={s.comparison}
+              emphasized={s.emphasized}
             />
           ))}
         </div>

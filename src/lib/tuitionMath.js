@@ -109,7 +109,7 @@ export function applyDerivedFamilyCounts(distribution, totalFamilies) {
   }))
 }
 
-// Discount % from base for a tier — the new "DISCOUNT" column in the
+// Discount % from base for a tier — the "DISCOUNT" column in the
 // Tier Rates section. Tier 1 is the base; returns null for it (UI
 // renders empty cell). Other tiers return ((tier1 - thisTier) /
 // tier1) × 100.
@@ -118,4 +118,176 @@ export function tierDiscountPct(tierRate, tier1Rate) {
   const tr = Number(tierRate) || 0
   if (t1 <= 0) return null
   return ((t1 - tr) / t1) * 100
+}
+
+// ============================================================================
+// v3.8.3 (B1.2) — Stage 1 revenue and discount math.
+//
+// All seven functions take the full scenario object and return null when
+// inputs are insufficient. Null propagation is deliberate: a fresh
+// scenario surfaces "not yet entered" honestly rather than rendering a
+// misleading zero.
+//
+// Vocabulary (architecture §7.3, "Stage 1 revenue vocabulary"):
+//   Projected Gross Tuition         = tier_1_rate × total_students
+//                                      (base × headcount, no tier blending)
+//   Tier-blended tuition revenue    = Σ tier_rate × family_count × students_per_family_in_tier
+//                                      (top tier honors top_tier_avg_students_per_family
+//                                       or falls back to top tier_size)
+//   Projected Multi-Student Discount = Projected Gross Tuition − tier-blended tuition
+//   Projected B&A Revenue            = hourly_rate × projected_hours
+//   Projected Fee Revenue            = (curriculum_fee + enrollment_fee) × total_students
+//   Projected Ed Program Revenue     = Gross Tuition + Fee Revenue + B&A Revenue
+//   Total Projected Discounts        = Multi-Student + Faculty + Other + Financial Aid
+//   Net Projected Ed Program Revenue = Ed Program Revenue − Total Projected Discounts
+//
+// Architectural note: these compute client-side for instant feedback
+// during Stage 1 iteration. Server-side hoist into compute_tuition_
+// scenario_kpis is queued for Tuition-C when the RPC starts returning
+// a real KPI bundle (break-even, net-ed-program-ratio vs locked Budget,
+// YoY). The persisted projected_multi_student_discount column is
+// written from the client-computed value on save for snapshot fidelity.
+// ============================================================================
+
+// Tier 1 rate from the tier_rates jsonb. Returns 0 when missing —
+// callers that need null propagation should handle that case before
+// calling this (most callers will, since gross-tuition computation
+// requires tier_1 to exist for a meaningful value).
+function getTier1Rate(scenario) {
+  const rates = Array.isArray(scenario?.tier_rates) ? scenario.tier_rates : []
+  const tier1 = rates.find((r) => Number(r.tier_size) === 1)
+  return tier1 ? Number(tier1.per_student_rate) || 0 : 0
+}
+
+// Projected Gross Tuition: tier_1_rate × total_students (base ×
+// headcount). Returns null when total_students is null or
+// non-finite — the absence is meaningful and the UI renders em-dash.
+export function computeProjectedGrossAtTier1(scenario) {
+  const totalStudents = scenario?.total_students
+  if (totalStudents == null || !Number.isFinite(Number(totalStudents))) return null
+  const tier1Rate = getTier1Rate(scenario)
+  return tier1Rate * Number(totalStudents)
+}
+
+// Tier-blended tuition revenue. Sums per-tier (tier_rate ×
+// family_count × students_per_family_in_tier) where the top tier
+// honors top_tier_avg_students_per_family or falls back to top
+// tier_size. Returns null when tier_rates or estimated_family_
+// distribution is missing/empty, or when family_counts are not yet
+// derived.
+//
+// "Not yet derived" is detected by total_families being null — when
+// the user has not entered total_students/breakdowns the family_counts
+// in the jsonb are still zero from the seed, and the tier-blended
+// computation would return zero (which is incorrect — we want null
+// to surface the absence).
+export function computeTierBlendedTuition(scenario) {
+  const rates = Array.isArray(scenario?.tier_rates) ? scenario.tier_rates : []
+  const dist = Array.isArray(scenario?.estimated_family_distribution)
+    ? scenario.estimated_family_distribution
+    : []
+  if (rates.length === 0 || dist.length === 0) return null
+
+  const totalFamilies = scenario?.total_families
+  if (totalFamilies == null || !Number.isFinite(Number(totalFamilies))) return null
+
+  const top = topTierSize(dist)
+  const topAvg = scenario?.top_tier_avg_students_per_family
+  const topAvgEffective =
+    topAvg != null && Number.isFinite(Number(topAvg)) ? Number(topAvg) : top
+
+  let total = 0
+  for (const distRow of dist) {
+    const tierSize = Number(distRow.tier_size)
+    const familyCount = Number(distRow.family_count) || 0
+    const studentsPerFamily =
+      tierSize === top ? topAvgEffective : tierSize
+    const rateRow = rates.find((r) => Number(r.tier_size) === tierSize)
+    const tierRate = rateRow ? Number(rateRow.per_student_rate) || 0 : 0
+    total += tierRate * familyCount * studentsPerFamily
+  }
+  return total
+}
+
+// Projected Multi-Student Discount: Projected Gross Tuition − tier-
+// blended tuition. Returns null if either input is null.
+//
+// At Stage 1 this is computed (as here). At Stage 2 (Tuition Audit)
+// the multi-student discount becomes per-family realized actual data
+// — see architecture §7.3 "Stage 1 projection vs. Stage 2 actual"
+// for the full vocabulary and the deliberate variance-as-calibration-
+// signal model.
+export function computeProjectedMultiStudentDiscount(scenario) {
+  const gross = computeProjectedGrossAtTier1(scenario)
+  const blended = computeTierBlendedTuition(scenario)
+  if (gross == null || blended == null) return null
+  return gross - blended
+}
+
+// Projected B&A Revenue: hourly_rate × projected_hours. Returns null
+// if either input is null. The hourly rate may legitimately be zero
+// (some schools do not charge a per-hour B&A fee), in which case the
+// computation returns zero — that is meaningful and distinct from
+// "not yet entered."
+export function computeProjectedBARevenue(scenario) {
+  const hours = scenario?.projected_b_a_hours
+  const rate = scenario?.before_after_school_hourly_rate
+  if (hours == null || !Number.isFinite(Number(hours))) return null
+  if (rate == null || !Number.isFinite(Number(rate))) return null
+  return Number(rate) * Number(hours)
+}
+
+// Projected Fee Revenue: (curriculum_fee + enrollment_fee) ×
+// total_students. Returns null if total_students is null. Fee values
+// default to 0 when null (B1.1 sets them to 0 explicitly via the
+// empty-state seed; this is defensive for forward compat).
+export function computeProjectedFeeRevenue(scenario) {
+  const totalStudents = scenario?.total_students
+  if (totalStudents == null || !Number.isFinite(Number(totalStudents))) return null
+  const curriculum = Number(scenario?.curriculum_fee_per_student) || 0
+  const enrollment = Number(scenario?.enrollment_fee_per_student) || 0
+  return (curriculum + enrollment) * Number(totalStudents)
+}
+
+// Projected Ed Program Revenue (gross): Projected Gross Tuition +
+// Projected Fee Revenue + Projected B&A Revenue.
+//
+// Strict null propagation on the gross-tuition and fee-revenue
+// components (both depend on total_students; if it is null the gross
+// concept is incomplete). B&A revenue treated as 0 when null (a
+// school may legitimately project zero B&A hours; that should not
+// poison the rest of the gross computation).
+export function computeProjectedEdProgramRevenue(scenario) {
+  const grossTuition = computeProjectedGrossAtTier1(scenario)
+  const feeRevenue = computeProjectedFeeRevenue(scenario)
+  if (grossTuition == null || feeRevenue == null) return null
+  const baRevenue = computeProjectedBARevenue(scenario) ?? 0
+  return grossTuition + feeRevenue + baRevenue
+}
+
+// Total Projected Discounts: Multi-Student + Faculty + Other +
+// Financial Aid. Faculty / Other / FA default to 0 when null (B1.1
+// makes them NOT NULL DEFAULT 0 at the schema level, but defensive
+// coalesce here keeps the function robust). Multi-Student propagates
+// null — without it the four-stream concept is incomplete.
+export function sumTotalProjectedDiscounts(scenario) {
+  const multiStudent = computeProjectedMultiStudentDiscount(scenario)
+  if (multiStudent == null) return null
+  const faculty = Number(scenario?.projected_faculty_discount_amount) || 0
+  const other = Number(scenario?.projected_other_discount) || 0
+  const fa = Number(scenario?.projected_financial_aid) || 0
+  return multiStudent + faculty + other + fa
+}
+
+// Net Projected Ed Program Revenue: Projected Ed Program Revenue −
+// Total Projected Discounts. The load-bearing operational KPI: this
+// is the "are we at 102% of expenses?" number that drives Stage 1
+// tuition-rate decisions.
+//
+// Returns null if either input is null.
+export function computeNetProjectedEdProgramRevenue(scenario) {
+  const gross = computeProjectedEdProgramRevenue(scenario)
+  const discounts = sumTotalProjectedDiscounts(scenario)
+  if (gross == null || discounts == null) return null
+  return gross - discounts
 }

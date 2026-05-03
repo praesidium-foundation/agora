@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { tierDiscountPct } from '../../lib/tuitionMath'
+import { tierDiscountPct, computeProjectedMultiStudentDiscount } from '../../lib/tuitionMath'
 
 // Tier Rates section — the spine of the layered discount taxonomy
 // (architecture §7.3). Multi-student tiers are the primary discount
@@ -23,6 +23,17 @@ import { tierDiscountPct } from '../../lib/tuitionMath'
 // off the Tier 1 rate. Empty for Tier 1 (the base); muted italic for
 // Tiers 2+. Read-only by definition (computed).
 //
+// v3.8.3 (B1.2) adds a Projected Multi-Student Discount subtotal row
+// at the table foot. Computed from tier math — Projected Gross Tuition
+// (base × headcount) minus tier-blended tuition revenue (Σ tier_rate ×
+// family_count × students_per_family). Read-only; renders in all
+// states. Surfaces the load-bearing first stream of the four-stream
+// discount taxonomy (architecture §7.3 "Stage 1 revenue vocabulary").
+// Stage 2 audit captures the actual realized multi-student discount
+// per family — the Stage 1 projection and Stage 2 actual are not
+// expected to agree (architecture §7.3 "Stage 1 projection vs.
+// Stage 2 actual").
+//
 // Editing model mirrors Budget's direct-edit-with-undo (architecture
 // §8.3). Click an amount → inline numeric input. Enter or blur saves;
 // Escape cancels. Save flows up via onChangeTierRates; the parent
@@ -33,6 +44,11 @@ import { tierDiscountPct } from '../../lib/tuitionMath'
 //   familyDistribution     — array of { tier_size, breakdown_pct, family_count }
 //                             (B1.1 jsonb shape); needed so add/remove
 //                             tier operations keep both arrays in sync
+//   scenario               — full scenario object (v3.8.3); used by the
+//                             Multi-Student Discount subtotal computation
+//                             which needs total_students,
+//                             total_families, top_tier_avg_*, plus the
+//                             two arrays above
 //   onChangeTierRates       (next) => void
 //   onChangeFamilyDistribution (next) => void
 //   readOnly               — true when scenario state != 'drafting' or user lacks edit perm
@@ -132,6 +148,7 @@ function RateEditor({ initial, onSave, onCancel }) {
 function TierRatesSection({
   tierRates = [],
   familyDistribution = [],
+  scenario,
   onChangeTierRates,
   onChangeFamilyDistribution,
   readOnly = false,
@@ -330,8 +347,57 @@ function TierRatesSection({
             + Add tier
           </button>
         )}
+
+        {/* v3.8.3 (B1.2): Projected Multi-Student Discount subtotal row.
+            Read-only by definition (computed from tier rates ×
+            family-distribution math). Renders in all states; em-dash
+            when inputs are insufficient (no total_students, no
+            family_counts derived, etc.). Visual separation from the
+            tier rows: thin navy@25 rule above the row reads as a
+            totaling rule rather than a section break. The row label
+            uses Tier 2 weight (medium navy) to distinguish it from the
+            tier-row leaves while staying inside the section's gold-
+            border-top frame. */}
+        <ProjectedMultiStudentDiscountRow scenario={scenario} />
       </div>
     </section>
+  )
+}
+
+const usd0Subtotal = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0,
+})
+
+function ProjectedMultiStudentDiscountRow({ scenario }) {
+  const value = scenario ? computeProjectedMultiStudentDiscount(scenario) : null
+  const display = value === null || value === undefined || !Number.isFinite(Number(value))
+    ? '—'
+    : usd0Subtotal.format(Number(value))
+  return (
+    <div className="mt-4 pt-3 border-t-[0.5px] border-navy/25">
+      <div className="flex items-center gap-3 pr-3 py-2">
+        <div className="flex-1 min-w-0">
+          <p className="font-body font-semibold text-navy text-[13.5px]">
+            Projected Multi-Student Discount
+          </p>
+          <p className="font-body italic text-muted text-[11px] mt-0.5 leading-relaxed">
+            Computed from tier math. Stage 2 audit captures the actual
+            realized discount per family.
+          </p>
+        </div>
+        <span
+          className={`text-right tabular-nums font-body font-semibold text-[13.5px] w-32 flex-shrink-0 ${
+            value !== null && value !== undefined && Number(value) > 0
+              ? 'text-navy'
+              : 'text-navy/85'
+          }`}
+        >
+          {display}
+        </span>
+      </div>
+    </div>
   )
 }
 

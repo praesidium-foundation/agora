@@ -8,6 +8,11 @@ import { defaultTierRates, defaultFamilyDistribution } from '../../lib/tuitionDe
 import {
   applyDerivedFamilyCounts,
   computeTotalFamilies,
+  computeProjectedMultiStudentDiscount,
+  computeProjectedGrossAtTier1,
+  computeProjectedEdProgramRevenue,
+  sumTotalProjectedDiscounts,
+  computeNetProjectedEdProgramRevenue,
 } from '../../lib/tuitionMath'
 import AppShell from '../../components/AppShell'
 import AYESelector from '../../components/AYESelector'
@@ -349,7 +354,7 @@ function TuitionWorksheet() {
       supabase.from('academic_years').select('id, label').eq('id', ayeId).single(),
       supabase
         .from('tuition_worksheet_scenarios')
-        .select('id, scenario_label, description, is_recommended, state, created_at, locked_at, locked_by, locked_via, override_justification, tier_count, tier_rates, faculty_discount_pct, projected_faculty_discount_amount, projected_other_discount, projected_financial_aid, curriculum_fee_per_student, enrollment_fee_per_student, before_after_school_hourly_rate, estimated_family_distribution, total_students, total_families, top_tier_avg_students_per_family, actual_before_after_school_hours, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
+        .select('id, scenario_label, description, is_recommended, state, created_at, locked_at, locked_by, locked_via, override_justification, tier_count, tier_rates, faculty_discount_pct, projected_faculty_discount_amount, projected_other_discount, projected_financial_aid, curriculum_fee_per_student, enrollment_fee_per_student, before_after_school_hourly_rate, projected_b_a_hours, projected_multi_student_discount, estimated_family_distribution, total_students, total_families, top_tier_avg_students_per_family, actual_before_after_school_hours, unlock_requested, unlock_request_justification, unlock_requested_at, unlock_requested_by, unlock_approval_1_at, unlock_approval_1_by, unlock_approval_2_at, unlock_approval_2_by')
         .eq('aye_id', ayeId)
         .eq('stage_id', stage.id)
         .order('created_at', { ascending: true }),
@@ -420,6 +425,11 @@ function TuitionWorksheet() {
           total_students: null,
           total_families: null,
           top_tier_avg_students_per_family: null,
+          // v3.8.3 (B1.2): two new columns. Both nullable; null until
+          // the user enters a value or until persistFields recomputes
+          // multi-student-discount on a save that sets the inputs.
+          projected_b_a_hours: null,
+          projected_multi_student_discount: null,
           created_by: user?.id ?? null,
           updated_by: user?.id ?? null,
         })
@@ -443,17 +453,35 @@ function TuitionWorksheet() {
   // Save is implicit on every edit; the header's "Save" button is a
   // confidence affordance (it surfaces a toast).
 
+  // v3.8.3 (B1.2): every persistFields call also recomputes
+  // projected_multi_student_discount from the projected post-patch
+  // state and persists it through to the column. This keeps the
+  // stored value as the at-save snapshot of the math, so downstream
+  // reads (lock snapshot capture, future RPC math) work without
+  // recomputation. The math lives in tuitionMath.js for now and
+  // will hoist into compute_tuition_scenario_kpis at Tuition-C.
   const persistFields = useCallback(async (fields) => {
     if (!activeScenario) return false
     const previous = { ...activeScenario }
 
+    // Project the post-patch scenario state and recompute the
+    // multi-student discount against it. Returns null when inputs
+    // are insufficient (no total_students, no derived family_counts,
+    // etc.); column accepts NULL.
+    const projected = { ...activeScenario, ...fields }
+    const newDiscount = computeProjectedMultiStudentDiscount(projected)
+    const fullPatch = {
+      ...fields,
+      projected_multi_student_discount: newDiscount,
+    }
+
     setScenarios((prev) =>
-      prev.map((s) => (s.id === activeScenario.id ? { ...s, ...fields } : s))
+      prev.map((s) => (s.id === activeScenario.id ? { ...s, ...fullPatch } : s))
     )
 
     const { error } = await supabase
       .from('tuition_worksheet_scenarios')
-      .update({ ...fields, updated_by: user?.id ?? null })
+      .update({ ...fullPatch, updated_by: user?.id ?? null })
       .eq('id', activeScenario.id)
 
     if (error) {
@@ -687,57 +715,56 @@ function TuitionWorksheet() {
 
   // ---- stats (data-driven; direct sums in B1, computed KPIs in C) ------
 
-  // v3.8.2 (B1.1): stats read from new direct fields (total_students,
-  // total_families, projected_*). Em-dashes when underlying inputs
-  // are null (rather than zero) so a fresh scenario surfaces "not yet
-  // entered" honestly.
+  // v3.8.3 (B1.2): six stats in spec order, with Net Projected Ed
+  // Program Revenue visually emphasized as the load-bearing operational
+  // KPI. All stats compute via tuitionMath helpers with null
+  // propagation — em-dashes for missing core inputs (total_students,
+  // tier rates, etc.) so a fresh scenario surfaces "not yet entered"
+  // honestly. The four-stream Total Projected Discounts now includes
+  // Multi-Student (computed from tier math) per the architecture §7.3
+  // "Stage 1 revenue vocabulary" subsection.
   const stats = useMemo(() => {
     if (!activeScenario) return []
-    const rates = Array.isArray(activeScenario.tier_rates) ? activeScenario.tier_rates : []
-    const tier1 = rates.find((r) => Number(r.tier_size) === 1)
-    const tier1Rate = tier1 ? Number(tier1.per_student_rate) || 0 : 0
-
-    const totalStudents = activeScenario.total_students
-    const totalFamilies = activeScenario.total_families
-
-    const projectedGrossAtTier1 =
-      totalStudents != null && Number.isFinite(Number(totalStudents))
-        ? tier1Rate * Number(totalStudents)
-        : null
-
-    // Sum of three projected discount $ fields. Always defined (the DB
-    // columns are NOT NULL or default 0); render even when zero so the
-    // sidebar is informative as the user fills the page in.
-    const totalProjectedDiscounts =
-      (Number(activeScenario.projected_faculty_discount_amount) || 0) +
-      (Number(activeScenario.projected_other_discount) || 0) +
-      (Number(activeScenario.projected_financial_aid) || 0)
-
     return [
       {
-        key: 'projected_gross',
-        label: 'Projected gross at Tier 1',
-        value: projectedGrossAtTier1,
+        key: 'projected_gross_tuition',
+        label: 'Projected Gross Tuition',
+        sublabel: 'Total students × Tier 1 rate',
+        value: computeProjectedGrossAtTier1(activeScenario),
         format: 'currency',
-        subtitle: 'Total students × Tier 1 rate',
+      },
+      {
+        key: 'projected_ed_program_revenue',
+        label: 'Projected Ed Program Revenue',
+        sublabel: 'Gross Tuition + Fees + B&A',
+        value: computeProjectedEdProgramRevenue(activeScenario),
+        format: 'currency',
       },
       {
         key: 'total_projected_discounts',
-        label: 'Total projected discounts',
-        value: totalProjectedDiscounts,
+        label: 'Total Projected Discounts',
+        sublabel: 'Multi-Student + Faculty + Other + Financial Aid',
+        value: sumTotalProjectedDiscounts(activeScenario),
         format: 'currency',
-        subtitle: 'Faculty + Other + Financial Aid',
+      },
+      {
+        key: 'net_projected_ed_program_revenue',
+        label: 'Net Projected Ed Program Revenue',
+        sublabel: 'Ed Program Revenue − Discounts',
+        value: computeNetProjectedEdProgramRevenue(activeScenario),
+        format: 'currency',
+        emphasized: true,
       },
       {
         key: 'projected_families',
-        label: 'Projected families',
-        value: totalFamilies != null ? Number(totalFamilies) : null,
+        label: 'Projected Families',
+        value: activeScenario.total_families != null ? Number(activeScenario.total_families) : null,
         format: 'integer',
       },
       {
         key: 'projected_students',
-        label: 'Projected students',
-        value: totalStudents != null ? Number(totalStudents) : null,
+        label: 'Projected Students',
+        value: activeScenario.total_students != null ? Number(activeScenario.total_students) : null,
         format: 'integer',
       },
     ]
