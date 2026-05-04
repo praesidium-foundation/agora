@@ -5,58 +5,31 @@ import FieldLabel from '../FieldLabel'
 
 // Capture Tuition Audit Snapshot modal.
 //
-// v3.8.16 (Tuition-B2-final). Stage 2 (Tuition Audit) is a living
-// working document — there is no lock workflow. Snapshots are
-// operator-triggered reference points captured throughout the
-// school year (end of fall semester, mid-year, end of school year).
+// v3.8.17 (Tuition-B2-final-fixes). The reason taxonomy from v3.8.16
+// is dropped — schools have varying operational calendars and the
+// taxonomy added rigidity without analytical value. The freeform
+// `snapshot_label` field already conveys what the operator wants to
+// communicate about the snapshot's purpose.
 //
 // Calls capture_tuition_audit_snapshot(p_scenario_id, p_snapshot_
-// reason, p_snapshot_label) RPC introduced in Migration 038.
-//
-// Reason taxonomy (matches the CHECK constraint on
-// tuition_worksheet_snapshots.snapshot_reason):
-//   - midyear_reference     (default)
-//   - fall_semester_end
-//   - spring_semester_end
-//   - school_year_end
-//   - other                 (label required)
+// label) — two-arg signature introduced in Migration 039.
 //
 // Props:
-//   scenario   — active Stage 2 scenario row (for the AYE label
-//                in the auto-populated label suggestion)
-//   ayeLabel   — e.g. "AYE 2026"
+//   scenario   — active Stage 2 scenario row
+//   ayeLabel   — optional; not used in v3.8.17 (the auto-suggested
+//                label was retired alongside the reason taxonomy);
+//                kept in props for back-compat in case the parent
+//                still passes it.
 //   onCancel   — () => void
-//   onSuccess  — (newSnapshotId) => void; parent shows toast and
-//                refreshes the snapshots panel if open
-
-const REASON_OPTIONS = [
-  { value: 'midyear_reference',  label: 'Mid-year reference' },
-  { value: 'fall_semester_end',  label: 'End of fall semester' },
-  { value: 'spring_semester_end', label: 'End of spring semester' },
-  { value: 'school_year_end',    label: 'End of school year' },
-  { value: 'other',              label: 'Other' },
-]
-
-function suggestedLabel(reason, ayeLabel) {
-  const today = new Date()
-  const dateStr = today.toLocaleDateString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-  })
-  switch (reason) {
-    case 'midyear_reference':   return `Mid-year reference ${dateStr}`
-    case 'fall_semester_end':   return `End of fall semester${ayeLabel ? ` ${ayeLabel}` : ''}`
-    case 'spring_semester_end': return `End of spring semester${ayeLabel ? ` ${ayeLabel}` : ''}`
-    case 'school_year_end':     return `End of school year${ayeLabel ? ` ${ayeLabel}` : ''}`
-    case 'other':               return ''
-    default:                    return ''
-  }
-}
+//   onSuccess  — (newSnapshotId) => void
 
 export default function CaptureSnapshotModal({ scenario, ayeLabel, onCancel, onSuccess }) {
+  // ayeLabel is intentionally unused in v3.8.17 — kept in props for
+  // call-site back-compat. Reference once to silence unused-var lint.
+  void ayeLabel
+
   const toast = useToast()
-  const [reason, setReason] = useState('midyear_reference')
-  const [label, setLabel] = useState(() => suggestedLabel('midyear_reference', ayeLabel))
-  const [labelEditedManually, setLabelEditedManually] = useState(false)
+  const [label, setLabel] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(null)
 
@@ -68,26 +41,8 @@ export default function CaptureSnapshotModal({ scenario, ayeLabel, onCancel, onS
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel, submitting])
 
-  // When reason changes and the operator hasn't manually edited the
-  // label, refresh the suggested label.
-  function handleReasonChange(nextReason) {
-    setReason(nextReason)
-    if (!labelEditedManually) {
-      setLabel(suggestedLabel(nextReason, ayeLabel))
-    }
-  }
-
-  function handleLabelChange(nextLabel) {
-    setLabel(nextLabel)
-    setLabelEditedManually(true)
-  }
-
   const labelTrimmed = label.trim()
-  const labelRequired = reason === 'other'
-  const canSubmit =
-    !submitting &&
-    !!scenario?.id &&
-    (!labelRequired || labelTrimmed.length > 0)
+  const canSubmit = !submitting && !!scenario?.id && labelTrimmed.length > 0
 
   async function handleConfirm() {
     if (!canSubmit) return
@@ -96,12 +51,11 @@ export default function CaptureSnapshotModal({ scenario, ayeLabel, onCancel, onS
     try {
       const { data, error } = await supabase.rpc('capture_tuition_audit_snapshot', {
         p_scenario_id: scenario.id,
-        p_snapshot_reason: reason,
-        p_snapshot_label: labelTrimmed.length > 0 ? labelTrimmed : null,
+        p_snapshot_label: labelTrimmed,
       })
       if (error) throw error
       const newId = Array.isArray(data) ? data[0] : data
-      toast.success(`Snapshot captured${labelTrimmed ? `: ${labelTrimmed}` : ''}.`)
+      toast.success(`Snapshot captured: ${labelTrimmed}`)
       onSuccess?.(newId)
     } catch (e) {
       setSubmitError(e.message || String(e))
@@ -144,49 +98,32 @@ export default function CaptureSnapshotModal({ scenario, ayeLabel, onCancel, onS
           <p className="text-body text-sm leading-relaxed mb-4">
             Snapshots preserve the current state of the Tuition Audit at a
             specific point in time. Use snapshots to record reference
-            points throughout the school year — for example, at the end
-            of fall semester, mid-year, or at year-end. Snapshots can be
-            reviewed via the Snapshots link in the page header.
+            points throughout the school year. Snapshots can be reviewed
+            via the Snapshots link in the page header.
           </p>
 
-          <FieldLabel htmlFor="snapshot-reason">
-            Snapshot reason
+          <FieldLabel htmlFor="snapshot-label">
+            Snapshot label (required)
           </FieldLabel>
-          <div id="snapshot-reason" role="radiogroup" className="space-y-1.5 mt-1">
-            {REASON_OPTIONS.map((opt) => (
-              <label key={opt.value} className="flex items-center gap-2 cursor-pointer text-sm">
-                <input
-                  type="radio"
-                  name="snapshot-reason"
-                  value={opt.value}
-                  checked={reason === opt.value}
-                  onChange={() => handleReasonChange(opt.value)}
-                  className="accent-navy"
-                />
-                <span className="text-body">{opt.label}</span>
-              </label>
-            ))}
-          </div>
-
-          <div className="mt-5">
-            <FieldLabel htmlFor="snapshot-label">
-              Snapshot label{labelRequired ? ' (required)' : ' (optional)'}
-            </FieldLabel>
-            <input
-              id="snapshot-label"
-              type="text"
-              value={label}
-              onChange={(e) => handleLabelChange(e.target.value)}
-              placeholder={labelRequired ? 'Required when reason is "Other"' : 'Optional'}
-              className="w-full bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none"
-            />
-            <p className="font-body text-[11px] text-muted italic mt-1.5">
-              Examples: "End of Fall 2025", "Pre-board-meeting reference".
-              {!labelEditedManually && reason !== 'other' && (
-                <> A default has been suggested; you may edit it.</>
-              )}
-            </p>
-          </div>
+          <input
+            id="snapshot-label"
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="What does this snapshot represent?"
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && canSubmit) {
+                e.preventDefault()
+                handleConfirm()
+              }
+            }}
+            className="w-full bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none"
+          />
+          <p className="font-body text-[11px] text-muted italic mt-1.5">
+            Examples: "End of Fall 2025", "Mid-year reference 2/15/26",
+            "Pre-board-meeting".
+          </p>
 
           {submitError && (
             <p className="text-status-red text-sm mt-4" role="alert">

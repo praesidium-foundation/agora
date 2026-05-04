@@ -703,11 +703,11 @@ function TierRatesCard({ scenario }) {
 }
 
 function DiscountEnvelopesCard({ envelopes }) {
-  if (!envelopes) return <Card title="Discount Envelopes" />
+  if (!envelopes) return <Card title="Discounts" />
   const { rows, total } = envelopes
 
   return (
-    <Card title="Discount Envelopes">
+    <Card title="Discounts">
       <div className="grid grid-cols-[120px_1fr_75px_75px_85px] gap-x-3 gap-y-1.5 items-baseline text-[12px]">
         {/* Header row (column legends) */}
         <span />
@@ -720,11 +720,15 @@ function DiscountEnvelopesCard({ envelopes }) {
           <EnvelopeRow key={row.key} row={row} />
         ))}
 
-        {/* Total row */}
+        {/* Total row. Budget renders as a positive amount (it's a
+            projected envelope, not a realized debit). Used renders
+            in parens (realized discount; conceptually a debit
+            against tuition revenue). Remaining renders conditional:
+            positive → green; negative (over-budget) → red parens. */}
         <span className="text-body font-medium border-t-[0.5px] border-card-border pt-1.5 mt-0.5">{total.label}</span>
         <span className="border-t-[0.5px] border-card-border pt-1.5 mt-0.5" />
         <span className="tabular-nums text-navy text-right border-t-[0.5px] border-card-border pt-1.5 mt-0.5">
-          {formatCurrency(total.budget, { subtractive: true })}
+          {formatCurrency(total.budget)}
         </span>
         <span className="tabular-nums text-navy text-right border-t-[0.5px] border-card-border pt-1.5 mt-0.5">
           {formatCurrency(total.used, { subtractive: true })}
@@ -732,7 +736,7 @@ function DiscountEnvelopesCard({ envelopes }) {
         <span className={`tabular-nums text-right border-t-[0.5px] border-card-border pt-1.5 mt-0.5 ${
           total.remaining < 0 ? 'text-status-red' : 'text-status-green'
         }`}>
-          {formatCurrency(total.remaining)}
+          {formatCurrency(total.remaining, { subtractive: total.remaining < 0 })}
         </span>
       </div>
     </Card>
@@ -752,14 +756,17 @@ function EnvelopeRow({ row }) {
           aria-label={`${Math.round(pct)}% used`}
         />
       </span>
+      {/* Budget: positive number; the envelope is a projection, not a
+          realized debit. Used: parens (realized discount = subtractive).
+          Remaining: conditional — positive green, negative red parens. */}
       <span className="tabular-nums text-navy text-right">
-        {formatCurrency(row.budget, { subtractive: true })}
+        {formatCurrency(row.budget)}
       </span>
       <span className="tabular-nums text-navy text-right">
         {formatCurrency(row.used, { subtractive: true })}
       </span>
       <span className={`tabular-nums text-right ${row.remaining < 0 ? 'text-status-red' : 'text-status-green'}`}>
-        {formatCurrency(row.remaining)}
+        {formatCurrency(row.remaining, { subtractive: row.remaining < 0 })}
       </span>
     </>
   )

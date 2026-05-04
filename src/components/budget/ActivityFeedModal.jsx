@@ -53,7 +53,11 @@ function passesFilter(event, filter) {
   if (filter === 'governance') {
     return ['lock', 'submit', 'reject', 'override', 'recommend',
       'unlock_requested', 'unlock_first_approval', 'unlock_completed',
-      'unlock_rejected', 'unlock_withdrawn'].includes(event.kind)
+      'unlock_rejected', 'unlock_withdrawn',
+      // v3.8.17: tuition snapshot capture is an operator-driven
+      // governance-flavored event — preserves state at a reference
+      // point even though it doesn't change scenario state.
+      'snapshot_captured'].includes(event.kind)
   }
   if (filter === 'edits') {
     return ['amount', 'edit', 'insert', 'delete'].includes(event.kind)
@@ -274,12 +278,17 @@ function FeedRow({ event }) {
     unlock_completed:        'border-status-blue bg-status-blue-bg/40',
     unlock_rejected:         'border-status-red bg-status-red-bg/30',
     unlock_withdrawn:        'border-card-border bg-cream-highlight/40',
+    // v3.8.17 (Tuition-B2-final-fixes): operator-captured snapshot.
+    // Gold rule (the brand "operator reference" treatment) —
+    // distinct from blue/lock and amber/in-progress.
+    snapshot_captured:       'border-gold bg-cream-highlight/30',
   }
   const cls = treatments[event.kind] || 'border-card-border'
   const isGov = [
     'lock', 'override',
     'unlock_requested', 'unlock_first_approval', 'unlock_completed',
     'unlock_rejected', 'unlock_withdrawn',
+    'snapshot_captured',
   ].includes(event.kind)
 
   // Override events render the full justification text underneath the
@@ -294,6 +303,10 @@ function FeedRow({ event }) {
   let icon = null
   if (event.kind === 'lock') icon = { glyph: '🔒', tone: 'text-status-blue' }
   if (event.kind === 'unlock_completed') icon = { glyph: '🔓', tone: 'text-status-blue' }
+  // v3.8.17: no icon for snapshot_captured — the gold left rule on
+  // the row (border-gold treatment in the kindStyles map above) is
+  // the visual signal. NO emoji is added per the no-emoji discipline
+  // established in B2a/B2-final.
 
   return (
     <li className={`pl-3 pr-2 py-1.5 border-l-2 ${cls} ${isGov ? 'rounded-r' : ''}`}>

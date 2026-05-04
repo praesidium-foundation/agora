@@ -147,10 +147,17 @@ export function classifyEvent(event) {
     if (event.reason === 'unlock_completed')      return 'unlock_completed'
     if (event.reason.startsWith('unlock_rejected'))  return 'unlock_rejected'
     if (event.reason.startsWith('unlock_withdrawn')) return 'unlock_withdrawn'
+    // v3.8.17 (Tuition-B2-final-fixes): snapshot_captured is a
+    // synthetic event written directly to change_log by
+    // capture_tuition_audit_snapshot — see Migration 039 header.
+    if (event.reason.startsWith('snapshot_captured')) return 'snapshot_captured'
   }
 
   if (fieldByName.__insert__) return 'insert'
   if (fieldByName.__delete__) return 'delete'
+  // Field-name marker (set when the RPC writes the synthetic event
+  // without setting reason — defensive fallback).
+  if (fieldByName.__snapshot_captured__) return 'snapshot_captured'
 
   const stateField = fieldByName.state
   if (stateField) {
@@ -485,6 +492,23 @@ export function summarizeEvent(event) {
       return reasonText
         ? `Unlock request withdrawn. Reason: "${reasonText}"`
         : `Unlock request withdrawn`
+    }
+    case 'snapshot_captured': {
+      // v3.8.17: synthetic change_log row written by capture_tuition_
+      // audit_snapshot. The label is in the new_value jsonb of the
+      // __snapshot_captured__ field. Fallback: parse from reason
+      // ('snapshot_captured: <label>') if the field isn't present.
+      const f = event.fields.find((x) => x.field_name === '__snapshot_captured__')
+      let label = null
+      if (f && f.new_value && typeof f.new_value === 'object') {
+        label = f.new_value.label || null
+      }
+      if (!label && event.reason && event.reason.startsWith('snapshot_captured: ')) {
+        label = event.reason.slice('snapshot_captured: '.length).trim()
+      }
+      return label
+        ? `Snapshot captured: "${label}"`
+        : `Snapshot captured`
     }
     case 'amount': {
       const f = event.fields.find((x) => x.field_name === 'amount')

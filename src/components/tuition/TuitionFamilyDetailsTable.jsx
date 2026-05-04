@@ -141,21 +141,25 @@ export default function TuitionFamilyDetailsTable({
         <table className="w-full text-[12px] font-body border-collapse">
           <thead className="sticky top-0 z-10 bg-cream-highlight/80 backdrop-blur">
             <tr className="border-b-[0.5px] border-card-border">
-              <Th className="w-[32px] text-center">#</Th>
-              <Th className="min-w-[130px] text-left">Family<br />Name</Th>
-              <Th className="w-[60px] text-center">Faculty</Th>
-              <Th className="w-[50px] text-center groupEnd"># Enr.</Th>
-              <Th className="w-[92px] text-right">Base<br />Tuition</Th>
-              <Th className="w-[100px] text-right">Multiple<br />Student Disc.</Th>
-              <Th className="w-[100px] text-right">Net<br />Tuition Rate</Th>
-              <Th className="w-[105px] text-right groupEnd">Subtotal<br />for Year</Th>
-              <Th className="w-[105px] text-right">Faculty<br />Discount</Th>
-              <Th className="w-[100px] text-right">Other<br />Discount</Th>
-              <Th className="w-[105px] text-right groupEnd">Financial<br />Aid Amount</Th>
-              <Th className="w-[115px] text-right groupEnd font-medium">NET Tuition<br />for YEAR</Th>
-              <Th className="w-[88px] text-left">Date<br />Enrolled</Th>
-              <Th className="min-w-[180px] text-left">Notes</Th>
-              <Th className="w-[88px] text-left">Date<br />Withdrawn</Th>
+              {/* All headers center-aligned (Th component centers by
+                  default in v3.8.17). Font weight uniform across all
+                  columns — the bottom-line emphasis for NET Tuition
+                  for YEAR lives on the body cell, not the header. */}
+              <Th className="w-[32px]">#</Th>
+              <Th className="min-w-[130px]">Family<br />Name</Th>
+              <Th className="w-[60px]">Faculty</Th>
+              <Th className="w-[50px] groupEnd"># Enr.</Th>
+              <Th className="w-[92px]">Base<br />Tuition</Th>
+              <Th className="w-[100px]">Multiple<br />Student Disc.</Th>
+              <Th className="w-[100px]">Net<br />Tuition Rate</Th>
+              <Th className="w-[105px] groupEnd">Subtotal<br />for Year</Th>
+              <Th className="w-[105px]">Faculty<br />Discount</Th>
+              <Th className="w-[100px]">Other<br />Discount</Th>
+              <Th className="w-[105px] groupEnd">Financial<br />Aid Amount</Th>
+              <Th className="w-[115px] groupEnd">NET Tuition<br />for YEAR</Th>
+              <Th className="w-[88px]">Date<br />Enrolled</Th>
+              <Th className="min-w-[180px]">Notes</Th>
+              <Th className="w-[88px]">Date<br />Withdrawn</Th>
               <Th className="w-[28px]" aria-label="Row actions" />
             </tr>
           </thead>
@@ -397,15 +401,18 @@ function FamilyRow({
 // ----- Cell sub-components ---------------------------------------------
 
 // Header cell — solid #192A4F navy at 11.5px Cinzel small-caps,
-// centered or aligned per the column. Two-line headers via <br/>.
-// The `groupEnd` class adds a subtle right divider matching the
-// architecture mockup's vertical group lines.
+// CENTER-aligned by default (v3.8.17 spec — uniform centering
+// across all column headers regardless of body cell alignment).
+// Font weight uniform across all headers (no font-medium on any
+// individual column). Two-line headers via <br/>. The `groupEnd`
+// class adds a subtle right divider matching the v3 mockup's
+// vertical group lines.
 function Th({ children, className = '' }) {
   const isGroupEnd = className.includes('groupEnd')
   const cleaned = className.replace('groupEnd', '').trim()
   return (
     <th
-      className={`px-2 py-2 align-bottom font-display text-[11.5px] uppercase tracking-[0.06em] text-navy ${cleaned} ${
+      className={`px-2 py-2 align-bottom font-display text-[11.5px] uppercase tracking-[0.06em] text-navy text-center ${cleaned} ${
         isGroupEnd ? 'border-r-[0.5px] border-card-border' : ''
       }`}
       style={isGroupEnd ? { borderRightColor: '#D4CDB8' } : undefined}
