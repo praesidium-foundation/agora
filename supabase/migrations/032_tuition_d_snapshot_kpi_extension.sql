@@ -87,8 +87,18 @@ alter table tuition_worksheet_snapshots
 -- mirrors src/lib/tuitionMath.js's computeNetEdProgramRatio and
 -- computeBreakevenEnrollment.
 --
+-- DROP first because PostgreSQL refuses to change a function's OUT
+-- parameter list via CREATE OR REPLACE — the row type defined by OUT
+-- parameters is part of the function's signature in PG's eyes. A
+-- two-step DROP + CREATE is the supported path. Dependent functions
+-- (lock_tuition_scenario calls this via SELECT * INTO) are NOT
+-- blocked by the DROP because PL/pgSQL function-to-function calls
+-- resolve at execution time, not via pg_depend.
+--
 -- Helper subquery: reads expense_comparator_amount from the scenario
 -- row. NULL means "no comparator" → both KPIs NULL.
+
+drop function if exists compute_tuition_scenario_kpis(uuid);
 
 create or replace function compute_tuition_scenario_kpis(p_scenario_id uuid)
 returns table (
