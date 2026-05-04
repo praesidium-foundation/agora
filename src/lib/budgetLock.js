@@ -114,6 +114,18 @@ export function validateScenarioForLock(scenario, lines, lockedSibling = null) {
 // when the upstream resolution is straightforward (lock the Tuition
 // Planning, then submit).
 //
+// v3.8.16 (Tuition-B2-final): Tuition Stage 2 (Tuition Audit) is
+// no longer a lockable artifact — it is a working document
+// maintained throughout the school year and snapshotted on
+// operator-driven cadence (capture_tuition_audit_snapshot RPC). So
+// Final Budget cascade no longer has a "Stage 2 locked" upstream
+// requirement. Final Budget continues to require Tuition Stage 1
+// locked, but that's enforced via the existing module-level
+// `school_lock_cascade_rules` row (`budget → tuition locked`) which
+// fires for both Preliminary and Final stages of Budget. No
+// per-stage hardcoded check is needed for Final Budget today; the
+// hardcoded Stage 1 check above is Preliminary-Budget-specific.
+//
 // Prospective enforcement note: this rule is enforced at the
 // application layer only (no DB trigger added in v3.8.10), and only
 // fires on NEW lock submissions. AYE 2026's Preliminary Budget is

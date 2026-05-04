@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   computeFamilyAppliedTierRate,
   computeFamilyFacultyDiscountAuto,
@@ -14,57 +14,66 @@ import TuitionFamilyHistoryModal from './TuitionFamilyHistoryModal'
 
 // Per-family editor table for Tuition Stage 2 (Tuition Audit).
 //
-// Architecture §7.3 ("Stage 2 immutability rules" + "Faculty discount
-// rule" v3.8.14). The operational surface where the school records
-// actual enrollment family-by-family, allocates discretionary
-// discount envelopes (Faculty / Other / Financial Aid), and
-// captures audit-trail-grade Notes per family.
+// v3.8.16 (Tuition-B2-final) redesign — column ordering, sticky
+// header, vertical group dividers, inline-adjacent gold-dot override
+// indicator, # row-number column, # Enrolled without spinner arrows.
+// The 15-column layout matches Libertas's legacy audit Google Sheet
+// for continuity with the operator's existing mental model.
 //
-// Mirrors the legacy Google Sheet's column structure for continuity
-// with the operator's existing mental model. Eleven primary columns
-// (Family Name, # Enrolled, Base Tuition, Multi-Student Discount,
-// Net Tuition Rate, Subtotal Tuition for Year, Faculty Discount,
-// Other Discounts, Financial Aid, NET Tuition for YEAR, Notes), plus
-// an is_faculty_family toggle in a narrow leading column, plus
-// date_enrolled / date_withdrawn columns for mid-year enrollment
-// tracking. Per-row clock affordance opens TuitionFamilyHistoryModal
-// for the Notes column's change_log history.
+// Column order (matches the v3 mockup):
 //
-// Faculty discount rule (architecture §7.3 + Appendix C):
-//   Faculty discount REPLACES multi-student tier discount. Toggling
-//   is_faculty_family true cascades: applied_tier_size = 1,
-//   applied_tier_rate = base_rate, faculty_discount_amount = base ×
-//   students × pct/100. The Multi-Student Discount column displays
-//   $0 for faculty families. Manual overrides (faculty_discount_amount
-//   or applied_tier_rate) are visually marked with a small gold dot
-//   indicator at the cell's top-right corner with a tooltip showing
-//   the auto-computed value.
+//   1. #                          (row number, computed from sort position)
+//   2. Family Name                (text input)
+//   3. Faculty                    (checkbox toggle)
+//   4. # Enr.                     (integer input, no spinner)
+//                                 ─── Identity group divider ───
+//   5. Base Tuition               (computed)
+//   6. Multiple Student Disc.     (computed; $0 for faculty)
+//   7. Net Tuition Rate           (computed; gold-dot if overridden)
+//   8. Subtotal for Year          (computed)
+//                                 ─── Computed group divider ───
+//   9. Faculty Discount           (editable; gold-dot if overridden;
+//                                  faculty families only)
+//  10. Other Discount             (editable currency)
+//  11. Financial Aid Amount       (editable currency)
+//                                 ─── Discount allocations divider ───
+//  12. NET Tuition for YEAR       (computed; emphasized)
+//                                 ─── Result divider ───
+//  13. Date Enrolled              (date input)
+//  14. Notes                      (textarea, flex)
+//  15. Date Withdrawn             (date input; null shows em-dash)
 //
-// Sort: faculty families clustered alphabetically at the top; thin
-// navy separator rule between faculty and non-faculty groups; then
-// non-faculty alphabetically. Sort is automatic, not user-configurable.
+//  + row-actions (history clock + delete; no header label)
+//
+// Sort is controlled by the parent (TuitionAuditPage) via the Sort By
+// dropdown. The table receives `families` already in display order
+// and renders them as-is. New rows from + Add Family append to the
+// END of the current order until the user explicitly re-sorts; the
+// table does not re-sort on data entry.
+//
+// Faculty discount rule (architecture §7.3 + Appendix C v3.8.14):
+// Faculty discount REPLACES multi-student tier discount. Toggling
+// is_faculty_family true cascades applied_tier_size = 1, applied_
+// tier_rate = base_rate, and faculty_discount_amount auto-populates
+// from base × students × pct. Manual overrides persist with a small
+// gold dot rendered INLINE-ADJACENT to the cell value (not corner-
+// absolute) — format: "● ($X,XXX)" with the dot in brand gold and
+// the value in the cell's normal color. Hover tooltip shows the
+// auto-computed value.
 //
 // Read-only state (scenario.state !== 'drafting'): all editable cells
 // render as plain text without input chrome. Notes textarea becomes
 // wrapped plain text. is_faculty_family toggle becomes a small
-// "Faculty" badge when true (hidden when false). Add Family
-// affordance hides. Clock icons for per-row history hide.
+// "Faculty" badge when true. Add Family affordance hidden by parent.
+// Clock icons for per-row history hide. Gold dots remain visible.
 //
 // Props:
-//   families     — array of tuition_worksheet_family_details rows
-//   scenario     — active Stage 2 scenario row (for tier_rates,
-//                  faculty_discount_pct)
+//   families     — array of tuition_worksheet_family_details rows in
+//                  display order (parent applies the sort)
+//   scenario     — active Stage 2 scenario row
 //   readOnly     — bool; when true, no input chrome anywhere
-//   onUpdateRow  — (familyId, patchObj) => Promise<boolean>; saves a
-//                  multi-field update atomically. Used for cascade
-//                  saves (toggling faculty triggers tier + faculty
-//                  discount cascade in one save).
-//   onDeleteRow  — (familyId) => Promise<void>; removes a family
-//                  (delete affordance is in the row's overflow menu;
-//                  only enabled for drafting state)
-//   onAddFamily  — () => Promise<void>; creates a new row with sane
-//                  defaults; parent focuses the new row's Family
-//                  Name input.
+//   onUpdateRow  — (familyId, patchObj) => Promise<boolean>
+//   onDeleteRow  — (familyId) => Promise<void>
 
 export default function TuitionFamilyDetailsTable({
   families,
@@ -72,31 +81,16 @@ export default function TuitionFamilyDetailsTable({
   readOnly,
   onUpdateRow,
   onDeleteRow,
-  onAddFamily,
 }) {
-  const [historyFor, setHistoryFor] = useState(null) // {familyId, familyLabel}
-  const [adding, setAdding] = useState(false)
+  const [historyFor, setHistoryFor] = useState(null)
 
-  // Sort: faculty first by name, then non-faculty by name.
-  const sorted = useMemo(() => sortFamilies(families), [families])
+  // Save cascades — invoked by row controls. Each computes the patch
+  // object and forwards to onUpdateRow.
 
-  // Find the boundary index between faculty and non-faculty so we can
-  // render the separator. -1 means no faculty (no separator) or
-  // all-faculty (no separator).
-  const facultyCount = sorted.filter((f) => f.is_faculty_family).length
-  const showSeparator = facultyCount > 0 && facultyCount < sorted.length
-
-  // Save cascades — invoked by row controls. Each returns the patch
-  // object to send to onUpdateRow, then executes the save.
-
-  // Toggle is_faculty_family. Cascades applied_tier_size,
-  // applied_tier_rate, faculty_discount_amount per architecture §7.3.
   async function handleToggleFaculty(family, nextValue) {
     if (readOnly) return
     const patch = { is_faculty_family: nextValue }
     if (nextValue) {
-      // Becoming faculty: tier collapses to 1 / base, faculty
-      // discount auto-populates.
       patch.applied_tier_size = 1
       patch.applied_tier_rate = baseRateOf(scenario)
       patch.faculty_discount_amount = computeFamilyFacultyDiscountAuto(
@@ -104,7 +98,6 @@ export default function TuitionFamilyDetailsTable({
         scenario,
       )
     } else {
-      // Leaving faculty: revert to natural tier; clear faculty discount.
       patch.applied_tier_size = naturalAppliedTierSize(
         { ...family, is_faculty_family: false },
         scenario,
@@ -118,21 +111,16 @@ export default function TuitionFamilyDetailsTable({
     await onUpdateRow(family.id, patch)
   }
 
-  // # Enrolled change. Cascades tier rate (for non-faculty without
-  // override) and faculty discount (for faculty without override).
   async function handleEnrolledChange(family, nextValue) {
     if (readOnly) return
     const patch = { students_enrolled: nextValue }
     const next = { ...family, students_enrolled: nextValue }
     if (family.is_faculty_family) {
-      // Faculty: tier stays at 1/base; recompute faculty discount
-      // unless manually overridden.
       const overridden = isFamilyFacultyDiscountOverridden(family, scenario)
       if (!overridden) {
         patch.faculty_discount_amount = computeFamilyFacultyDiscountAuto(next, scenario)
       }
     } else {
-      // Non-faculty: recompute tier_size and tier_rate unless overridden.
       const overridden = isFamilyTierRateOverridden(family, scenario)
       if (!overridden) {
         patch.applied_tier_size = naturalAppliedTierSize(next, scenario)
@@ -142,67 +130,51 @@ export default function TuitionFamilyDetailsTable({
     await onUpdateRow(family.id, patch)
   }
 
-  // Single-field saves for the simple cells (label, dates, currency).
   async function handleFieldSave(familyId, field, value) {
     if (readOnly) return
     await onUpdateRow(familyId, { [field]: value })
   }
 
-  async function handleAddFamilyClick() {
-    if (readOnly) return
-    if (adding) return
-    setAdding(true)
-    try {
-      await onAddFamily()
-    } finally {
-      setAdding(false)
-    }
-  }
-
   return (
     <div className="w-full">
-      <div className="overflow-x-auto -mx-1">
-        <table className="w-full text-[12px] font-body">
-          <thead>
-            <tr className="text-left border-b-[0.5px] border-card-border bg-cream-highlight/40">
-              <Th className="w-[40px] text-center">Faculty</Th>
-              <Th className="min-w-[160px]">Family Name</Th>
-              <Th className="w-[60px] text-center"># Enr.</Th>
-              <Th className="w-[100px]">Date Enrolled</Th>
-              <Th className="w-[100px]">Date Withdrawn</Th>
-              <Th className="w-[90px] text-right">Base Tuition</Th>
-              <Th className="w-[110px] text-right">Multi-Student Discount</Th>
-              <Th className="w-[105px] text-right">Net Tuition Rate</Th>
-              <Th className="w-[110px] text-right">Subtotal / Yr</Th>
-              <Th className="w-[105px] text-right">Faculty Discount</Th>
-              <Th className="w-[100px] text-right">Other Disc.</Th>
-              <Th className="w-[100px] text-right">Financial Aid</Th>
-              <Th className="w-[120px] text-right font-medium">NET / Yr</Th>
-              <Th className="min-w-[180px]">Notes</Th>
-              <Th className="w-[24px]" aria-label="Row actions" />
+      <div className="overflow-x-auto overflow-y-auto bg-white border-[0.5px] border-card-border rounded-[6px] max-h-[calc(100vh-22rem)] tuition-audit-table-wrapper">
+        <table className="w-full text-[12px] font-body border-collapse">
+          <thead className="sticky top-0 z-10 bg-cream-highlight/80 backdrop-blur">
+            <tr className="border-b-[0.5px] border-card-border">
+              <Th className="w-[32px] text-center">#</Th>
+              <Th className="min-w-[130px] text-left">Family<br />Name</Th>
+              <Th className="w-[60px] text-center">Faculty</Th>
+              <Th className="w-[50px] text-center groupEnd"># Enr.</Th>
+              <Th className="w-[92px] text-right">Base<br />Tuition</Th>
+              <Th className="w-[100px] text-right">Multiple<br />Student Disc.</Th>
+              <Th className="w-[100px] text-right">Net<br />Tuition Rate</Th>
+              <Th className="w-[105px] text-right groupEnd">Subtotal<br />for Year</Th>
+              <Th className="w-[105px] text-right">Faculty<br />Discount</Th>
+              <Th className="w-[100px] text-right">Other<br />Discount</Th>
+              <Th className="w-[105px] text-right groupEnd">Financial<br />Aid Amount</Th>
+              <Th className="w-[115px] text-right groupEnd font-medium">NET Tuition<br />for YEAR</Th>
+              <Th className="w-[88px] text-left">Date<br />Enrolled</Th>
+              <Th className="min-w-[180px] text-left">Notes</Th>
+              <Th className="w-[88px] text-left">Date<br />Withdrawn</Th>
+              <Th className="w-[28px]" aria-label="Row actions" />
             </tr>
           </thead>
           <tbody>
-            {sorted.length === 0 && (
+            {(!Array.isArray(families) || families.length === 0) ? (
               <tr>
-                <td colSpan={15} className="px-3 py-6 text-muted italic text-center">
+                <td colSpan={16} className="px-3 py-6 text-muted italic text-center">
                   No families recorded yet. Use “+ Add Family” below to begin.
                 </td>
               </tr>
-            )}
-            {sorted.map((family, idx) => {
-              const isLastFacultyRow =
-                showSeparator &&
-                family.is_faculty_family &&
-                idx + 1 < sorted.length &&
-                !sorted[idx + 1].is_faculty_family
-              return (
+            ) : (
+              families.map((family, idx) => (
                 <FamilyRow
                   key={family.id}
+                  rowNumber={idx + 1}
                   family={family}
                   scenario={scenario}
                   readOnly={readOnly}
-                  bottomSeparator={isLastFacultyRow}
+                  zebra={idx % 2 === 1}
                   onToggleFaculty={handleToggleFaculty}
                   onEnrolledChange={handleEnrolledChange}
                   onFieldSave={handleFieldSave}
@@ -214,24 +186,11 @@ export default function TuitionFamilyDetailsTable({
                   }
                   onDelete={() => onDeleteRow?.(family.id)}
                 />
-              )
-            })}
+              ))
+            )}
           </tbody>
         </table>
       </div>
-
-      {!readOnly && (
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={handleAddFamilyClick}
-            disabled={adding}
-            className="font-body text-status-blue hover:underline text-[13px] disabled:opacity-50 disabled:cursor-wait"
-          >
-            {adding ? 'Adding…' : '+ Add Family'}
-          </button>
-        </div>
-      )}
 
       {historyFor && (
         <TuitionFamilyHistoryModal
@@ -244,17 +203,16 @@ export default function TuitionFamilyDetailsTable({
   )
 }
 
-// ----- Row component ----------------------------------------------------
+// ----- Row component ---------------------------------------------------
 
 function FamilyRow({
-  family, scenario, readOnly, bottomSeparator,
+  rowNumber, family, scenario, readOnly, zebra,
   onToggleFaculty, onEnrolledChange, onFieldSave,
   onOpenHistory, onDelete,
 }) {
   const baseRate = baseRateOf(scenario)
   const students = Number(family.students_enrolled) || 0
 
-  // Computed values for the read-only cells.
   const baseTuition = baseRate > 0 && students > 0 ? baseRate * students : null
   const multiStudent = computeFamilyMultiStudentDiscount(family, scenario)
   const netRate = computeFamilyAppliedTierRate(family, scenario)
@@ -264,14 +222,27 @@ function FamilyRow({
   const facultyOverridden = isFamilyFacultyDiscountOverridden(family, scenario)
   const tierOverridden = isFamilyTierRateOverridden(family, scenario)
 
-  // Row class — bottom separator after the last faculty family.
-  const rowClass = `border-b-[0.5px] border-card-border/60 hover:bg-cream-highlight/20 ${
-    bottomSeparator ? 'border-b-2 border-b-navy/25' : ''
-  }`
+  const rowBg = zebra ? 'bg-cream-highlight/15' : 'bg-white'
 
   return (
-    <tr className={rowClass}>
-      {/* Faculty toggle */}
+    <tr className={`border-b-[0.5px] border-card-border/40 ${rowBg} hover:bg-cream-highlight/40 transition-colors`}>
+      {/* # row number */}
+      <Td className="text-center text-muted tabular-nums">
+        {rowNumber}
+      </Td>
+
+      {/* Family Name */}
+      <Td>
+        <TextCell
+          value={family.family_label || ''}
+          readOnly={readOnly}
+          maxLength={80}
+          onSave={(v) => onFieldSave(family.id, 'family_label', v.trim())}
+          placeholder="Family name…"
+        />
+      </Td>
+
+      {/* Faculty */}
       <Td className="text-center">
         {readOnly ? (
           family.is_faculty_family ? (
@@ -290,25 +261,81 @@ function FamilyRow({
         )}
       </Td>
 
-      {/* Family Name */}
-      <Td>
-        <TextCell
-          value={family.family_label || ''}
-          readOnly={readOnly}
-          maxLength={80}
-          onSave={(v) => onFieldSave(family.id, 'family_label', v.trim())}
-          placeholder="Family name…"
-        />
-      </Td>
-
-      {/* # Enrolled */}
-      <Td className="text-center">
+      {/* # Enrolled — Identity group end */}
+      <Td className="text-center groupEnd">
         <IntegerCell
           value={family.students_enrolled}
           readOnly={readOnly}
           min={1}
           onSave={(v) => onEnrolledChange(family, v)}
         />
+      </Td>
+
+      {/* Base Tuition */}
+      <Td className="text-right">
+        <ComputedCell value={baseTuition} />
+      </Td>
+
+      {/* Multiple Student Discount — $0 explicitly for faculty */}
+      <Td className="text-right">
+        <ComputedCell value={multiStudent} subtractive />
+      </Td>
+
+      {/* Net Tuition Rate — gold dot inline if overridden */}
+      <Td className="text-right">
+        {tierOverridden && (
+          <OverrideDot autoValue={naturalAppliedTierRate(family, scenario)} />
+        )}
+        <ComputedCell value={netRate} />
+      </Td>
+
+      {/* Subtotal for Year — Computed group end */}
+      <Td className="text-right groupEnd">
+        <ComputedCell value={subtotal} />
+      </Td>
+
+      {/* Faculty Discount — editable for faculty; em-dash for non-faculty */}
+      <Td className="text-right">
+        {family.is_faculty_family ? (
+          <span className="inline-flex items-center justify-end w-full">
+            {facultyOverridden && (
+              <OverrideDot autoValue={facultyAuto} />
+            )}
+            <CurrencyCell
+              value={family.faculty_discount_amount}
+              readOnly={readOnly}
+              subtractive
+              onSave={(v) => onFieldSave(family.id, 'faculty_discount_amount', v)}
+            />
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
+      </Td>
+
+      {/* Other Discount */}
+      <Td className="text-right">
+        <CurrencyCell
+          value={family.other_discount_amount}
+          readOnly={readOnly}
+          subtractive
+          onSave={(v) => onFieldSave(family.id, 'other_discount_amount', v)}
+        />
+      </Td>
+
+      {/* Financial Aid Amount — Discount Allocations group end */}
+      <Td className="text-right groupEnd">
+        <CurrencyCell
+          value={family.financial_aid_amount}
+          readOnly={readOnly}
+          subtractive
+          onSave={(v) => onFieldSave(family.id, 'financial_aid_amount', v)}
+        />
+      </Td>
+
+      {/* NET Tuition for YEAR — Result group end */}
+      <Td className="text-right groupEnd">
+        <ComputedCell value={netForYear} emphasized />
       </Td>
 
       {/* Date Enrolled */}
@@ -320,89 +347,21 @@ function FamilyRow({
         />
       </Td>
 
-      {/* Date Withdrawn */}
-      <Td>
-        <DateCell
-          value={family.date_withdrawn}
-          readOnly={readOnly}
-          onSave={(v) => onFieldSave(family.id, 'date_withdrawn', v)}
-        />
-      </Td>
-
-      {/* Base Tuition (computed) */}
-      <Td className="text-right">
-        <ComputedCell value={baseTuition} />
-      </Td>
-
-      {/* Multi-Student Discount (computed; $0 for faculty) */}
-      <Td className="text-right">
-        <ComputedCell value={multiStudent} subtractive />
-      </Td>
-
-      {/* Net Tuition Rate (computed; gold dot if tier overridden) */}
-      <Td className="text-right relative">
-        <ComputedCell value={netRate} />
-        {tierOverridden && (
-          <OverrideDot autoValue={naturalAppliedTierRate(family, scenario)} />
-        )}
-      </Td>
-
-      {/* Subtotal / Yr (computed) */}
-      <Td className="text-right">
-        <ComputedCell value={subtotal} />
-      </Td>
-
-      {/* Faculty Discount (editable; gold dot if overridden; only
-          editable when is_faculty_family is true) */}
-      <Td className="text-right relative">
-        {family.is_faculty_family ? (
-          <CurrencyCell
-            value={family.faculty_discount_amount}
-            readOnly={readOnly}
-            subtractive
-            onSave={(v) => onFieldSave(family.id, 'faculty_discount_amount', v)}
-          />
-        ) : (
-          // Non-faculty families: the field doesn't apply. Render
-          // em-dash so it reads as "not applicable."
-          <span className="text-muted">—</span>
-        )}
-        {facultyOverridden && (
-          <OverrideDot autoValue={facultyAuto} />
-        )}
-      </Td>
-
-      {/* Other Discounts */}
-      <Td className="text-right">
-        <CurrencyCell
-          value={family.other_discount_amount}
-          readOnly={readOnly}
-          subtractive
-          onSave={(v) => onFieldSave(family.id, 'other_discount_amount', v)}
-        />
-      </Td>
-
-      {/* Financial Aid */}
-      <Td className="text-right">
-        <CurrencyCell
-          value={family.financial_aid_amount}
-          readOnly={readOnly}
-          subtractive
-          onSave={(v) => onFieldSave(family.id, 'financial_aid_amount', v)}
-        />
-      </Td>
-
-      {/* NET / Yr (computed; emphasized) */}
-      <Td className="text-right">
-        <ComputedCell value={netForYear} emphasized />
-      </Td>
-
       {/* Notes */}
       <Td>
         <NotesCell
           value={family.notes || ''}
           readOnly={readOnly}
           onSave={(v) => onFieldSave(family.id, 'notes', v)}
+        />
+      </Td>
+
+      {/* Date Withdrawn — null displays as em-dash, not placeholder */}
+      <Td>
+        <DateCell
+          value={family.date_withdrawn}
+          readOnly={readOnly}
+          onSave={(v) => onFieldSave(family.id, 'date_withdrawn', v)}
         />
       </Td>
 
@@ -437,17 +396,35 @@ function FamilyRow({
 
 // ----- Cell sub-components ---------------------------------------------
 
+// Header cell — solid #192A4F navy at 11.5px Cinzel small-caps,
+// centered or aligned per the column. Two-line headers via <br/>.
+// The `groupEnd` class adds a subtle right divider matching the
+// architecture mockup's vertical group lines.
 function Th({ children, className = '' }) {
+  const isGroupEnd = className.includes('groupEnd')
+  const cleaned = className.replace('groupEnd', '').trim()
   return (
-    <th className={`px-2 py-2 font-display text-[11px] uppercase tracking-wider text-muted ${className}`}>
+    <th
+      className={`px-2 py-2 align-bottom font-display text-[11.5px] uppercase tracking-[0.06em] text-navy ${cleaned} ${
+        isGroupEnd ? 'border-r-[0.5px] border-card-border' : ''
+      }`}
+      style={isGroupEnd ? { borderRightColor: '#D4CDB8' } : undefined}
+    >
       {children}
     </th>
   )
 }
 
 function Td({ children, className = '' }) {
+  const isGroupEnd = className.includes('groupEnd')
+  const cleaned = className.replace('groupEnd', '').trim()
   return (
-    <td className={`px-2 py-1.5 align-middle ${className}`}>
+    <td
+      className={`px-2 py-1.5 align-middle ${cleaned} ${
+        isGroupEnd ? 'border-r-[0.5px]' : ''
+      }`}
+      style={isGroupEnd ? { borderRightColor: '#D4CDB8' } : undefined}
+    >
       {children}
     </td>
   )
@@ -464,17 +441,22 @@ function ComputedCell({ value, subtractive = false, emphasized = false }) {
   )
 }
 
+// Inline-adjacent gold dot. Renders immediately before the cell value
+// (using inline-flex on the parent <Td> when needed). Format from the
+// mockup: "● ($X,XXX)" with the dot in brand gold (#D7BF67) and the
+// value in the cell's normal color. Hover tooltip shows the auto
+// value. Implemented as an inline <span> for tooltip accessibility.
 function OverrideDot({ autoValue }) {
   const tip = autoValue != null
     ? `Manually overridden — auto value: ${formatCurrency(autoValue)}`
     : 'Manually overridden'
   return (
     <span
-      className="absolute top-1 right-1 text-gold text-[10px] leading-none cursor-help"
+      className="text-gold mr-1 cursor-help text-[12px] leading-none"
       title={tip}
       aria-label={tip}
     >
-      •
+      ●
     </span>
   )
 }
@@ -498,8 +480,6 @@ function ClockIcon() {
   )
 }
 
-// Text cell with input on focus, plain text on blur. Saves on blur
-// when the value changed.
 function TextCell({ value, readOnly, maxLength, placeholder, onSave }) {
   const [draft, setDraft] = useState(value)
   useEffect(() => { setDraft(value) }, [value])
@@ -526,6 +506,10 @@ function TextCell({ value, readOnly, maxLength, placeholder, onSave }) {
   )
 }
 
+// Integer cell. v3.8.16: native number input spinners (the up/down
+// arrows on Chrome / Firefox) are suppressed via `appearance: none`
+// + matching webkit-specific styles. Keeps the cell visually clean
+// like the legacy spreadsheet.
 function IntegerCell({ value, readOnly, min, onSave }) {
   const [draft, setDraft] = useState(value == null ? '' : String(value))
   useEffect(() => { setDraft(value == null ? '' : String(value)) }, [value])
@@ -547,13 +531,12 @@ function IntegerCell({ value, readOnly, min, onSave }) {
       onBlur={() => {
         const n = Number(draft)
         if (!Number.isFinite(n) || n < (min || 0)) {
-          // Revert silently to last good value.
           setDraft(value == null ? '' : String(value))
           return
         }
         if (n !== Number(value)) onSave(n)
       }}
-      className="w-full bg-transparent border-[0.5px] border-transparent hover:border-card-border focus:border-navy focus:bg-white px-1 py-0.5 rounded text-center tabular-nums text-body text-[12px] focus:outline-none"
+      className="w-full bg-transparent border-[0.5px] border-transparent hover:border-card-border focus:border-navy focus:bg-white px-1 py-0.5 rounded text-center tabular-nums text-body text-[12px] focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
     />
   )
 }
@@ -569,23 +552,51 @@ function DateCell({ value, readOnly, onSave }) {
       </span>
     )
   }
+  // When the stored value is null, show em-dash with a click affordance
+  // to switch to the date picker. This honors the spec ("null displays
+  // as em-dash, NOT 'mm/dd/yyyy' placeholder").
+  if (value == null && draft === '') {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          // Replace the button with an actual date input by setting
+          // draft to a sentinel that triggers the input render below.
+          // Use a tiny trick: focus the upcoming input on next tick.
+          e.preventDefault()
+          setDraft(' ')
+          setTimeout(() => {
+            const inputs = document.querySelectorAll('input[type="date"][data-just-armed="true"]')
+            const last = inputs[inputs.length - 1]
+            if (last) {
+              last.focus()
+              if (typeof last.showPicker === 'function') last.showPicker()
+            }
+          }, 0)
+        }}
+        className="text-muted hover:text-navy text-[12px]"
+        title="Set date"
+      >
+        —
+      </button>
+    )
+  }
   return (
     <input
       type="date"
-      value={draft}
+      data-just-armed={draft === ' ' ? 'true' : undefined}
+      value={draft === ' ' ? '' : draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
-        const next = draft || null
+        const next = draft && draft !== ' ' ? draft : null
         if ((next || null) !== (value || null)) onSave(next)
+        if (!next) setDraft('')
       }}
       className="w-full bg-transparent border-[0.5px] border-transparent hover:border-card-border focus:border-navy focus:bg-white px-1 py-0.5 rounded tabular-nums text-body text-[12px] focus:outline-none"
     />
   )
 }
 
-// Currency cell with parens-display convention from B1.3. Display
-// state shows formatCurrency result (parens for subtractive); focus
-// state shows raw numeric for entry.
 function CurrencyCell({ value, readOnly, subtractive, onSave }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value == null ? '' : String(value))
@@ -652,8 +663,8 @@ function NotesCell({ value, readOnly, onSave }) {
 
   if (readOnly) {
     return (
-      <p className="text-body text-[12px] whitespace-pre-wrap leading-relaxed">
-        {value || <span className="text-muted italic">—</span>}
+      <p className="text-body text-[12px] whitespace-pre-wrap leading-relaxed italic">
+        {value || <span className="text-muted not-italic">—</span>}
       </p>
     )
   }
@@ -667,9 +678,9 @@ function NotesCell({ value, readOnly, onSave }) {
         setFocused(false)
         if (draft !== value) onSave(draft)
       }}
-      rows={focused ? 4 : 2}
+      rows={focused ? 4 : 1}
       placeholder="Audit context, FA committee notes, board annotations…"
-      className="w-full bg-transparent border-[0.5px] border-transparent hover:border-card-border focus:border-navy focus:bg-white px-2 py-1 rounded text-body text-[12px] leading-relaxed resize-none focus:outline-none"
+      className="w-full bg-transparent border-[0.5px] border-transparent hover:border-card-border focus:border-navy focus:bg-white px-2 py-1 rounded text-body text-[12px] leading-relaxed resize-none focus:outline-none italic"
     />
   )
 }
@@ -682,21 +693,7 @@ function baseRateOf(scenario) {
   return t1 ? Number(t1.per_student_rate) || 0 : 0
 }
 
-function sortFamilies(families) {
-  if (!Array.isArray(families)) return []
-  return [...families].sort((a, b) => {
-    const af = a.is_faculty_family ? 0 : 1
-    const bf = b.is_faculty_family ? 0 : 1
-    if (af !== bf) return af - bf
-    const an = (a.family_label || '').toLowerCase()
-    const bn = (b.family_label || '').toLowerCase()
-    return an.localeCompare(bn)
-  })
-}
-
 function formatShortDate(iso) {
-  // iso may be a date-only string ('2026-09-08') or a full timestamp.
-  // Display as MM/DD/YY for tight fit.
   try {
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return iso

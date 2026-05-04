@@ -646,3 +646,181 @@ export function naturalAppliedTierSize(family, scenario) {
 export function naturalAppliedTierRate(family, scenario) {
   return naturalPerStudentRate(family, scenario)
 }
+
+// ============================================================================
+// v3.8.16 (Tuition-B2-final) — Stage 2 audit-page header zone aggregates.
+//
+// Three groups of helpers feeding the redesigned Tuition Audit page's
+// reference header zone (3-card grid):
+//   - Discount Envelopes card → computeEnvelopesUsed(families, scenario)
+//   - Enrolled Families card  → computeFamilyDistribution(families)
+//   - Net Tuition for Year    → computeNetTuitionForYear(families, scenario)
+//
+// All helpers operate on the live family_details array (loaded by
+// TuitionAuditPage) and the active Stage 2 scenario row (which carries
+// the Stage 1 envelope budgets via its `projected_*` columns —
+// inherited at scenario seed time per Migration 029).
+// ============================================================================
+
+// Sum of per-family multi-student discount across all families.
+// Faculty families contribute 0 per the faculty-discount-replaces-
+// multi-student-tier-discount rule (Appendix C v3.8.14).
+export function sumMultiStudentDiscountUsed(families, scenario) {
+  if (!Array.isArray(families)) return 0
+  let total = 0
+  for (const f of families) {
+    const v = computeFamilyMultiStudentDiscount(f, scenario)
+    if (v != null) total += Number(v) || 0
+  }
+  return total
+}
+
+// Sum of stored faculty_discount_amount across all families.
+// Operator-overridden values take precedence over auto-computed (the
+// stored value IS the truth at the row level; aggregate just sums).
+export function sumFacultyDiscountUsed(families) {
+  if (!Array.isArray(families)) return 0
+  let total = 0
+  for (const f of families) {
+    const v = Number(f?.faculty_discount_amount)
+    if (Number.isFinite(v)) total += v
+  }
+  return total
+}
+
+export function sumOtherDiscountUsed(families) {
+  if (!Array.isArray(families)) return 0
+  let total = 0
+  for (const f of families) {
+    const v = Number(f?.other_discount_amount)
+    if (Number.isFinite(v)) total += v
+  }
+  return total
+}
+
+export function sumFinancialAidUsed(families) {
+  if (!Array.isArray(families)) return 0
+  let total = 0
+  for (const f of families) {
+    const v = Number(f?.financial_aid_amount)
+    if (Number.isFinite(v)) total += v
+  }
+  return total
+}
+
+// Build the four-row envelope tracker shape for the Discount Envelopes
+// card. Each row: { key, label, budget, used, remaining }.
+//
+// budget values come from the scenario's projected_* columns (Stage 1
+// envelope budgets seeded into Stage 2 at create_tuition_scenario_
+// from_snapshot time). Multi-Student "budget" is the projected
+// multi_student_discount stored on the scenario by tuitionMath's
+// projection on every save (Migration 028).
+//
+// remaining = budget - used. Negative means over-budget (rendered as
+// parens in red by the UI per §10.12).
+export function computeEnvelopesUsed(families, scenario) {
+  const multiStudent = sumMultiStudentDiscountUsed(families, scenario)
+  const faculty = sumFacultyDiscountUsed(families)
+  const other = sumOtherDiscountUsed(families)
+  const fa = sumFinancialAidUsed(families)
+
+  const multiStudentBudget = Number(scenario?.projected_multi_student_discount) || 0
+  const facultyBudget = Number(scenario?.projected_faculty_discount_amount) || 0
+  const otherBudget = Number(scenario?.projected_other_discount) || 0
+  const faBudget = Number(scenario?.projected_financial_aid) || 0
+
+  const rows = [
+    {
+      key: 'multi_student',
+      label: 'Multi-Student',
+      budget: multiStudentBudget,
+      used: multiStudent,
+      remaining: multiStudentBudget - multiStudent,
+    },
+    {
+      key: 'faculty',
+      label: 'Faculty',
+      budget: facultyBudget,
+      used: faculty,
+      remaining: facultyBudget - faculty,
+    },
+    {
+      key: 'other',
+      label: 'Other',
+      budget: otherBudget,
+      used: other,
+      remaining: otherBudget - other,
+    },
+    {
+      key: 'financial_aid',
+      label: 'Financial Aid',
+      budget: faBudget,
+      used: fa,
+      remaining: faBudget - fa,
+    },
+  ]
+
+  const total = {
+    key: 'total',
+    label: 'Total',
+    budget: rows.reduce((s, r) => s + r.budget, 0),
+    used: rows.reduce((s, r) => s + r.used, 0),
+    remaining: rows.reduce((s, r) => s + r.remaining, 0),
+  }
+
+  return { rows, total }
+}
+
+// Family distribution — counts and percentages by tier. Used by the
+// Enrolled Families card.
+//
+// Returns:
+//   {
+//     tiers: [{ tier_size: 1, count, pct }, ..., { tier_size: '4+', count, pct }],
+//     totalFamilies, totalStudents
+//   }
+//
+// Tier 4+ collapses families with students_enrolled >= 4 into one
+// row. Withdrawn families (date_withdrawn set) are still counted —
+// they occupied seats during their enrolled period and the audit
+// records that fact.
+export function computeFamilyDistribution(families) {
+  if (!Array.isArray(families)) {
+    return { tiers: [], totalFamilies: 0, totalStudents: 0 }
+  }
+  const counts = { 1: 0, 2: 0, 3: 0, '4+': 0 }
+  let totalStudents = 0
+  for (const f of families) {
+    const n = Number(f?.students_enrolled) || 0
+    if (n >= 4) counts['4+']++
+    else if (n === 3) counts[3]++
+    else if (n === 2) counts[2]++
+    else if (n === 1) counts[1]++
+    totalStudents += n
+  }
+  const totalFamilies = (counts[1] + counts[2] + counts[3] + counts['4+']) || 0
+  const pct = (n) => (totalFamilies > 0 ? Math.round((n / totalFamilies) * 100) : 0)
+  return {
+    tiers: [
+      { tier_size: 1,    count: counts[1],     pct: pct(counts[1]) },
+      { tier_size: 2,    count: counts[2],     pct: pct(counts[2]) },
+      { tier_size: 3,    count: counts[3],     pct: pct(counts[3]) },
+      { tier_size: '4+', count: counts['4+'],  pct: pct(counts['4+']) },
+    ],
+    totalFamilies,
+    totalStudents,
+  }
+}
+
+// Aggregate NET tuition for the year across all families. Used by
+// the Enrolled Families card's footer line.
+export function computeNetTuitionForYear(families, scenario) {
+  if (!Array.isArray(families)) return 0
+  let total = 0
+  for (const f of families) {
+    const v = computeFamilyNetTuition(f, scenario)
+    if (v != null) total += Number(v) || 0
+  }
+  return total
+}
