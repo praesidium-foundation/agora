@@ -89,12 +89,22 @@ alter table tuition_worksheet_snapshots
 -- snapshot_reason = 'lock' and captured_at = locked_at. Zero rows in
 -- production today; the backfill documents semantic intent for any
 -- future migration that might run against pre-existing data.
+--
+-- Snapshot immutability is enforced by tg_prevent_snapshot_update
+-- (Migration 023), which raises on ANY UPDATE regardless of role.
+-- Bypass via session_replication_role = replica for the duration of
+-- this backfill only, then restore. Same pattern as Migration 031's
+-- tier_rates jsonb backfill.
+
+set local session_replication_role = replica;
 
 update tuition_worksheet_snapshots
    set snapshot_reason = 'lock',
        captured_at    = locked_at
  where snapshot_reason is null
    and locked_at is not null;
+
+set local session_replication_role = origin;
 
 
 -- ---- 3. capture_tuition_audit_snapshot RPC ------------------------------
