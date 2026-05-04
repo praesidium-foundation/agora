@@ -1316,6 +1316,7 @@ function BudgetStage() {
           scenario={activeScenario}
           lines={lines}
           ayeId={selectedAyeId}
+          scenarioStage={stage}
           isAdmin={!!canPbAdmin}
           lockedSibling={lockedSibling}
           onCancel={() => setSubmitLockOpen(false)}

@@ -74,7 +74,7 @@ export default function BudgetActivityPrint() {
           (accountsRes.data || []).map((a) => [a.id, { code: a.code, name: a.name }])
         )
 
-        const events = await fetchScenarioActivity(scenarioId, {
+        const events = await fetchScenarioActivity('budget', scenarioId, {
           limit: null,
           accountsById,
         })

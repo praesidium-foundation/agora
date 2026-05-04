@@ -72,10 +72,13 @@ const NAV_SECTIONS = [
     label: 'Planning',
     items: [
       { label: 'Enrollment Estimator', to: '/modules/enrollment', enabled: false, lockKey: 'enrollment_estimator' },
-      // Tuition collapsible parent. Today only the Planning child has
-      // an implemented destination; the Audit child appears when
-      // Phase 4d (Tuition Stage 2 setup) ships. Architecture §7.3
-      // commits to both stages.
+      // Tuition collapsible parent. Both children have implemented
+      // destinations as of v3.8.10 (Tuition-D): Planning is the
+      // Stage 1 worksheet; Audit is the Stage 2 setup gateway (the
+      // editing surface itself ships in a follow-on commit). Per
+      // architecture §3.4 + §7.5, Audit's setup is gated on a
+      // locked Stage 1 snapshot in the same AYE — the gateway
+      // surfaces that requirement directly when not yet satisfied.
       {
         label: 'Tuition',
         toggleOnly: true,
@@ -83,7 +86,7 @@ const NAV_SECTIONS = [
         lockKey: 'tuition',
         subItems: [
           { label: 'Planning', to: '/modules/tuition', enabled: true },
-          // { label: 'Audit', to: '/modules/tuition/audit', enabled: true } — Phase 4 follow-on
+          { label: 'Audit', to: '/modules/tuition/audit', enabled: true },
         ],
       },
       { label: 'Staffing', to: '/modules/staffing', enabled: false, lockKey: 'staffing' },

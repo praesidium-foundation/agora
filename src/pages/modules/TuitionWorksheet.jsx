@@ -26,6 +26,20 @@ import TuitionEmptyState from '../../components/tuition/TuitionEmptyState'
 import TuitionConfigurationZone from '../../components/tuition/TuitionConfigurationZone'
 import TuitionNewScenarioModal from '../../components/tuition/TuitionNewScenarioModal'
 import ScenarioSettingsModal from '../../components/budget/ScenarioSettingsModal'
+// v3.8.10 (Tuition-D): lock + unlock workflow surfaces.
+import TuitionLockBanner from '../../components/tuition/TuitionLockBanner'
+import SubmitForLockReviewModal from '../../components/tuition/SubmitForLockReviewModal'
+import LockReviewModal from '../../components/tuition/LockReviewModal'
+import RequestUnlockModal from '../../components/tuition/RequestUnlockModal'
+import UnlockApprovalModal from '../../components/tuition/UnlockApprovalModal'
+import RejectUnlockModal from '../../components/tuition/RejectUnlockModal'
+import WithdrawUnlockModal from '../../components/tuition/WithdrawUnlockModal'
+import ActivityFeedModal from '../../components/budget/ActivityFeedModal'  // generalized in v3.8.10
+import {
+  canSubmitForLockReview as canSubmitForLockReviewGate,
+  findLockedSibling,
+  submitTuitionScenarioForLockReview,
+} from '../../lib/tuitionWorksheet'
 
 // Tuition Stage 1 (Tuition Planning) configuration page.
 //
@@ -426,7 +440,12 @@ function TuitionWorksheet() {
   const { user } = useAuth()
   const toast = useToast()
   const { allowed: canView, loading: permLoading } = useModulePermission('tuition', 'view')
-  const { allowed: canEdit }      = useModulePermission('tuition', 'edit')
+  const { allowed: canEdit }           = useModulePermission('tuition', 'edit')
+  // v3.8.10 (Tuition-D): lock workflow permissions.
+  const { allowed: canSubmitLock }     = useModulePermission('tuition', 'submit_lock')
+  const { allowed: canApproveLock }    = useModulePermission('tuition', 'approve_lock')
+  const { allowed: canApproveUnlock }  = useModulePermission('tuition', 'approve_unlock')
+  const { allowed: canTuitionAdmin }   = useModulePermission('tuition', 'admin')
 
   // Stage metadata (loaded from module_workflow_stages) — drives the
   // page heading and is the source of truth for stage display name.
@@ -448,6 +467,19 @@ function TuitionWorksheet() {
   const [newScenarioOpen, setNewScenarioOpen] = useState(false)
   const [settingsModal, setSettingsModal] = useState(null)
 
+  // v3.8.10 (Tuition-D) modal state.
+  //   - submitLockOpen: SubmitForLockReviewModal
+  //   - lockReviewOpen: LockReviewModal (approver-facing; one modal
+  //     hosts both Approve and Reject paths)
+  //   - unlockModal: 'request' | 'approve' | 'reject' | 'withdraw' | null
+  //     (single piece of state since they all act on the active scenario
+  //     and only one is open at a time — same pattern as BudgetStage)
+  //   - activityFeedOpen: ActivityFeedModal (generalized for tuition)
+  const [submitLockOpen, setSubmitLockOpen] = useState(false)
+  const [lockReviewOpen, setLockReviewOpen] = useState(false)
+  const [unlockModal, setUnlockModal] = useState(null)
+  const [activityFeedOpen, setActivityFeedOpen] = useState(false)
+
   const [statsCollapsed, setStatsCollapsed] = useState(loadStatsCollapsed)
   useEffect(() => {
     try { localStorage.setItem(STATS_COLLAPSED_KEY, statsCollapsed ? '1' : '0') } catch { /* ignore */ }
@@ -455,6 +487,15 @@ function TuitionWorksheet() {
 
   const activeScenario = useMemo(
     () => scenarios.find((s) => s.id === activeScenarioId) || null,
+    [scenarios, activeScenarioId]
+  )
+
+  // v3.8.10: when ANY sibling in this (AYE, stage) is locked, every
+  // OTHER scenario is gated from claiming `recommended` or submitting
+  // for lock review (Migration 022 trigger + the application
+  // validator). Same pattern as Budget's findLockedSibling.
+  const lockedSibling = useMemo(
+    () => findLockedSibling(scenarios, activeScenarioId),
     [scenarios, activeScenarioId]
   )
 
@@ -870,6 +911,90 @@ function TuitionWorksheet() {
     await loadAyeContext(selectedAyeId, activeScenarioId)
   }
 
+  // ---- lock + unlock workflow (v3.8.10 / Tuition-D) -------------------
+
+  // Resolve lockedByName for the LockedBanner — same pattern as
+  // BudgetStage's lockedByName effect.
+  const [lockedByName, setLockedByName] = useState(null)
+  useEffect(() => {
+    if (!activeScenario?.locked_by) {
+      setLockedByName(null)
+      return
+    }
+    let mounted = true
+    ;(async () => {
+      const { data } = await supabase
+        .from('user_profiles')
+        .select('full_name')
+        .eq('id', activeScenario.locked_by)
+        .maybeSingle()
+      if (mounted) setLockedByName(data?.full_name || null)
+    })()
+    return () => { mounted = false }
+  }, [activeScenario?.id, activeScenario?.locked_by])
+
+  // SubmitForLockReviewModal confirm handler. Calls the
+  // submit_tuition_scenario_for_lock_review RPC; on success closes
+  // the modal and refetches scenario state. Override path passes
+  // p_locked_via='override' but the actual write happens in the
+  // approve-and-lock RPC (Tuition's submit RPC doesn't take
+  // locked_via — it just transitions state). To preserve the
+  // override intent through to lock, we update locked_via +
+  // override_justification on the scenario row separately when
+  // override is selected. Mirrors Budget's pattern in
+  // submitScenarioForLockReview.
+  async function handleSubmitLockConfirm({ lockedVia, overrideJustification }) {
+    if (!activeScenario) return
+    // For override submissions: write the locked_via + justification
+    // to the scenario row first so they survive into the snapshot.
+    // The submit RPC reads scenario state but does not touch
+    // locked_via; this UPDATE is safe (the scenario is still in
+    // 'drafting' state at this point — RLS edit perm covers it).
+    //
+    // Errors propagate directly to the modal's onConfirm catch
+    // (which sets submitError); no try/catch wrapper needed here.
+    if (lockedVia === 'override') {
+      const { error: updErr } = await supabase
+        .from('tuition_worksheet_scenarios')
+        .update({
+          locked_via: 'override',
+          override_justification: overrideJustification,
+          updated_by: user?.id ?? null,
+        })
+        .eq('id', activeScenario.id)
+      if (updErr) throw updErr
+    } else {
+      // Clear any stale locked_via/override_justification from a
+      // prior override-then-rejected cycle so the next submit
+      // starts clean.
+      const { error: updErr } = await supabase
+        .from('tuition_worksheet_scenarios')
+        .update({
+          locked_via: null,
+          override_justification: null,
+          updated_by: user?.id ?? null,
+        })
+        .eq('id', activeScenario.id)
+      if (updErr) throw updErr
+    }
+    await submitTuitionScenarioForLockReview({ scenarioId: activeScenario.id })
+    setSubmitLockOpen(false)
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
+  // LockReviewModal success handler — closes modal and refetches.
+  async function handleLockReviewSuccess() {
+    setLockReviewOpen(false)
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
+  // Unlock workflow modal success handler — closes modal and
+  // refetches. Mirrors BudgetStage's handleUnlockModalSuccess.
+  async function handleUnlockModalSuccess() {
+    setUnlockModal(null)
+    await loadAyeContext(selectedAyeId, activeScenarioId)
+  }
+
   // ---- expense comparator (v3.8.7 / Tuition-C) -------------------------
   //
   // Stage 1 KPIs (Net Education Program Ratio, Breakeven Enrollment)
@@ -1142,6 +1267,40 @@ function TuitionWorksheet() {
   const saveDisabled =
     !activeScenario || !canEdit || activeScenario.state !== 'drafting'
 
+  // Submit-for-Lock-Review button gating (v3.8.10). Same rule shape
+  // as Budget's HeaderZone (state=drafting + submit_lock + recommended +
+  // no sibling locked). Tuition admin satisfies submit_lock via
+  // permission subsumption — useModulePermission already accounts for
+  // that on the server side, so we don't OR with canTuitionAdmin here.
+  const submitLockGate = canSubmitForLockReviewGate({
+    scenario: activeScenario,
+    hasSubmitLock: canSubmitLock,
+    lockedSibling,
+  })
+  const submitLockDisabled = !submitLockGate.ok
+
+  const submitLockTooltip = !activeScenario
+    ? 'No scenario selected'
+    : !canSubmitLock
+      ? 'Submit for lock review requires submit_lock permission.'
+      : activeScenario.state !== 'drafting'
+        ? `Scenario is ${activeScenario.state}; submit not available in this state.`
+        : lockedSibling
+          ? `"${lockedSibling.scenario_label}" is currently locked in this (AYE, stage). Unlock it before submitting this scenario for lock review.`
+          : !activeScenario.is_recommended
+            ? 'This scenario must be marked as recommended before it can be locked. Use the scenario tab menu (⋮) to mark it.'
+            : 'Submit for lock review.'
+
+  // Inline-hint condition: every gate other than is_recommended is
+  // satisfied. Hidden when a different gate blocks (we don't want to
+  // nag the user with a non-actionable hint).
+  const showRecommendedHint =
+    !!activeScenario &&
+    !!canSubmitLock &&
+    !lockedSibling &&
+    activeScenario.state === 'drafting' &&
+    !activeScenario.is_recommended
+
   return (
     <AppShell>
       <div className="-mx-6 -my-6 flex flex-col h-[calc(100vh-3.5rem)]">
@@ -1176,9 +1335,29 @@ function TuitionWorksheet() {
                     }
                     onClick={() => toast.success('All changes are saved.')}
                   />
+                  {/* v3.8.10 (Tuition-D) — Submit for Lock Review.
+                      Primary affordance; gated by submitLockGate
+                      (state + permission + recommended + sibling). */}
+                  <ActionButton
+                    disabled={submitLockDisabled}
+                    label="Submit for Lock Review"
+                    primary
+                    title={submitLockTooltip}
+                    onClick={() => setSubmitLockOpen(true)}
+                  />
                 </div>
               </div>
             </div>
+
+            {/* Recommended-scenario inline hint. Same pattern as
+                BudgetStage's HeaderZone — visible only when
+                is_recommended is the specific blocker. */}
+            {showRecommendedHint && (
+              <p className="mt-2 text-right font-body italic text-[12px] text-muted leading-relaxed">
+                Mark this scenario as <span className="text-gold not-italic">★</span>{' '}
+                recommended (via the scenario tab menu) before submitting for lock review.
+              </p>
+            )}
 
             {scenarios.length > 0 && (
               <div className="mt-3 -mb-3 border-b-[0.5px] border-card-border flex items-end justify-between gap-4">
@@ -1190,20 +1369,18 @@ function TuitionWorksheet() {
                   onAction={handleScenarioAction}
                   canEdit={canEdit}
                 />
-                {/* Recent Activity affordance — stub in B1. The
-                    activity feed query helper (src/lib/auditLog.js's
-                    fetchScenarioActivity) is hardcoded to Budget's
-                    table names today; generalizing it for Tuition is
-                    a Tuition-D follow-up. The link is rendered as
-                    disabled with an explanatory tooltip rather than
-                    omitted entirely so the placement convention from
-                    Budget carries forward. */}
+                {/* Recent Activity affordance — wired up in v3.8.10
+                    (Tuition-D). Same modal as Budget's, with
+                    moduleId='tuition' so MODULE_AUDIT_CONFIGS reads
+                    tuition_worksheet_scenarios. Tuition Stage 1 has
+                    no per-row line table, so the modal renders
+                    scenario-row events only — the right granularity
+                    for Stage 1's inline-jsonb data shape. */}
                 {activeScenario && (
                   <button
                     type="button"
-                    disabled
-                    title="Activity feed wires up in Tuition-D once auditLog.fetchScenarioActivity is generalized for tuition tables."
-                    className="px-3 py-1.5 font-body text-[13px] text-muted/60 whitespace-nowrap flex-shrink-0 cursor-not-allowed"
+                    onClick={() => setActivityFeedOpen(true)}
+                    className="px-3 py-1.5 font-body text-[13px] text-status-blue hover:underline whitespace-nowrap flex-shrink-0"
                   >
                     Recent Activity
                   </button>
@@ -1240,14 +1417,58 @@ function TuitionWorksheet() {
                 </p>
               )
             ) : (
-              <TuitionConfigurationZone
-                scenario={activeScenario}
-                onUpdateField={handleUpdateField}
-                onUpdateTierRates={handleUpdateTierRates}
-                onUpdateFamilyDistribution={handleUpdateFamilyDistribution}
-                onUpdateTotalFamilies={handleUpdateTotalFamilies}
-                readOnly={readOnly}
-              />
+              <>
+                {/* v3.8.10 (Tuition-D) — lock-state banners. The
+                    unified TuitionLockBanner handles all three
+                    lock-state variants (pending, locked-no-request,
+                    locked-awaiting-final-approval) and returns null
+                    when the scenario is in drafting state. */}
+                <TuitionLockBanner
+                  scenario={activeScenario}
+                  aye={aye}
+                  stage={stage}
+                  lockedByName={lockedByName}
+                  currentUser={user}
+                  hasApproveLock={canApproveLock}
+                  hasApproveUnlock={canApproveUnlock}
+                  onApproveLock={() => setLockReviewOpen(true)}
+                  onRejectLock={() => setLockReviewOpen(true)}
+                  onRequestUnlock={() => setUnlockModal('request')}
+                  onApproveUnlock={() => setUnlockModal('approve')}
+                  onRejectUnlock={() => setUnlockModal('reject')}
+                  onWithdrawUnlock={() => setUnlockModal('withdraw')}
+                />
+
+                {/* Sibling-locked drafting banner — visible when a
+                    different scenario is locked and the user is on a
+                    drafting sibling. Mirrors BudgetStage's pattern. */}
+                {activeScenario.state === 'drafting' && lockedSibling && (
+                  <div className="mb-4 px-4 py-3 bg-status-amber-bg border-[0.5px] border-status-amber/30 rounded text-status-amber text-sm">
+                    <p className="font-display text-[13px] tracking-[0.06em] uppercase mb-0.5">
+                      Sibling scenario is locked
+                    </p>
+                    <p className="text-body">
+                      <strong className="font-medium">
+                        {lockedSibling.scenario_label}
+                      </strong>{' '}
+                      is currently locked for this {aye?.label || 'AYE'}{' '}
+                      {stage.display_name}. You can still draft and edit
+                      this scenario, but it cannot be marked recommended or
+                      submitted for lock review until the locked sibling
+                      is unlocked.
+                    </p>
+                  </div>
+                )}
+
+                <TuitionConfigurationZone
+                  scenario={activeScenario}
+                  onUpdateField={handleUpdateField}
+                  onUpdateTierRates={handleUpdateTierRates}
+                  onUpdateFamilyDistribution={handleUpdateFamilyDistribution}
+                  onUpdateTotalFamilies={handleUpdateTotalFamilies}
+                  readOnly={readOnly}
+                />
+              </>
             )}
           </div>
 
@@ -1278,6 +1499,75 @@ function TuitionWorksheet() {
           field={settingsModal.field}
           onClose={() => setSettingsModal(null)}
           onSave={handleSettingsSave}
+        />
+      )}
+
+      {/* v3.8.10 (Tuition-D) — lock workflow modals. */}
+      {submitLockOpen && activeScenario && (
+        <SubmitForLockReviewModal
+          scenario={activeScenario}
+          isAdmin={!!canTuitionAdmin}
+          lockedSibling={lockedSibling}
+          onCancel={() => setSubmitLockOpen(false)}
+          onConfirm={handleSubmitLockConfirm}
+        />
+      )}
+
+      {lockReviewOpen && activeScenario && (
+        <LockReviewModal
+          scenario={activeScenario}
+          onCancel={() => setLockReviewOpen(false)}
+          onSuccess={handleLockReviewSuccess}
+        />
+      )}
+
+      {/* Activity feed modal — same component as Budget, with
+          moduleId='tuition'. */}
+      {activityFeedOpen && activeScenario && (
+        <ActivityFeedModal
+          moduleId="tuition"
+          scenarioId={activeScenario.id}
+          accountsById={null}
+          onClose={() => setActivityFeedOpen(false)}
+        />
+      )}
+
+      {/* Unlock workflow modals. Each acts on the active scenario;
+          on success they call handleUnlockModalSuccess which closes
+          the modal and refetches scenario state. */}
+      {unlockModal === 'request' && activeScenario && (
+        <RequestUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          hasApproveUnlock={canApproveUnlock}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+      {unlockModal === 'approve' && activeScenario && (
+        <UnlockApprovalModal
+          scenario={activeScenario}
+          currentUser={user}
+          hasApproveUnlock={canApproveUnlock}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+      {unlockModal === 'reject' && activeScenario && (
+        <RejectUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          hasApproveUnlock={canApproveUnlock}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
+        />
+      )}
+      {unlockModal === 'withdraw' && activeScenario && (
+        <WithdrawUnlockModal
+          scenario={activeScenario}
+          currentUser={user}
+          onCancel={() => setUnlockModal(null)}
+          onSuccess={handleUnlockModalSuccess}
         />
       )}
     </AppShell>

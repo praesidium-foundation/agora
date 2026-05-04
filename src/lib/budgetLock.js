@@ -103,16 +103,42 @@ export function validateScenarioForLock(scenario, lines, lockedSibling = null) {
 // module_being_locked = 'budget' and verifies each required upstream
 // module is in the required state for the AYE.
 //
-// Returns { failures: [{required_module, required_state, actual_state,
-//                       is_required, message}] }.
+// v3.8.10 (Tuition-D): when `scenarioStageType === 'preliminary'`,
+// also injects a cross-module cascade failure for Tuition Stage 1.
+// Per architecture §7.5, a Preliminary Budget for AYE N cannot be
+// locked until the Tuition Stage 1 (Tuition Planning) for the same
+// AYE is locked — the locked tuition schedule is a key revenue
+// input the Preliminary Budget should reflect. This is a HARD BLOCK
+// (hardBlock: true on the failure) because the rule is enforceable
+// only at submit time; we don't want to expose an override path
+// when the upstream resolution is straightforward (lock the Tuition
+// Planning, then submit).
+//
+// Prospective enforcement note: this rule is enforced at the
+// application layer only (no DB trigger added in v3.8.10), and only
+// fires on NEW lock submissions. AYE 2026's Preliminary Budget is
+// already locked at v3.8.10 ship time and predates this rule; the
+// historical artifact is preserved as-is. The cascade fires the
+// next time anyone goes through the lock flow on a Preliminary
+// Budget — for AYE 2026 that means after an unlock + re-lock cycle,
+// or when AYE 2027 ships.
+//
+// Returns { failures: [{kind, required_module, required_state,
+//                       actual_state, is_required, message,
+//                       hardBlock?}] }.
 //
 // "actual_state" is 'not started' when no module_instance row exists
 // for that (module, aye).
 //
-// Note: cascade rules are per-MODULE, not per-stage. All stages of
-// the budget workflow share the same upstream requirements (per
-// architecture Section 9.7 — per-stage rules are not yet in scope).
-export async function checkCascadeRules(ayeId) {
+// Note: cascade rules in school_lock_cascade_rules are per-MODULE,
+// not per-stage. The Tuition→Budget cross-module rule introduced
+// here IS per-stage (only Preliminary Budget gates on Tuition);
+// rather than extending the rules table schema (an avoidable
+// migration), v3.8.10 hardcodes this single rule alongside the
+// table-driven generic rules. When the catalog of cross-module
+// per-stage rules grows, we can hoist it into a `_per_stage` rules
+// table.
+export async function checkCascadeRules(ayeId, { scenarioStageType = null } = {}) {
   const [rulesResult, instancesResult] = await Promise.all([
     supabase
       .from('school_lock_cascade_rules')
@@ -146,7 +172,69 @@ export async function checkCascadeRules(ayeId) {
       })
     }
   }
+
+  // v3.8.10 (Tuition-D) cross-module per-stage cascade: Preliminary
+  // Budget gates on a locked Tuition Stage 1 in the same AYE.
+  if (scenarioStageType === 'preliminary') {
+    const tuitionState = await getTuitionStage1LockState(ayeId)
+    if (!tuitionState.locked) {
+      failures.push({
+        kind: 'tuition_stage_1_not_locked',
+        hardBlock: true,
+        is_required: true,
+        message:
+          'Tuition Planning must be locked for this AYE before the Preliminary Budget can be locked. ' +
+          'The locked tuition schedule is a key revenue input the Preliminary Budget should reflect.',
+      })
+    }
+  }
+
   return { failures }
+}
+
+// Probe whether a Tuition Stage 1 (preliminary) lock exists for the
+// given AYE. Used by checkCascadeRules's cross-module rule and
+// directly by any UI surface that wants to gate on "is the upstream
+// Tuition piece ready?" without running the full cascade check.
+//
+// Returns { locked: boolean, stageDisplayName: string|null }. The
+// stage display name is captured-by-value from
+// tuition_worksheet_snapshots when present, else read from the live
+// stages table — useful for surfacing "you need to lock Tuition
+// Planning first" with the school's actual configured stage label.
+//
+// One round-trip: a lookup against tuition_worksheet_snapshots
+// joined to the workflow stage row. Returns locked=true iff at least
+// one snapshot row exists for the (AYE, preliminary stage).
+export async function getTuitionStage1LockState(ayeId) {
+  // Resolve the preliminary-typed stage of the tuition workflow.
+  const { data: stages, error: stageErr } = await supabase
+    .from('module_workflow_stages')
+    .select('id, display_name, module_workflows!inner(modules!inner(code))')
+    .eq('module_workflows.modules.code', 'tuition')
+    .eq('stage_type', 'preliminary')
+    .limit(1)
+  if (stageErr) throw stageErr
+  const stage = stages?.[0]
+  if (!stage) {
+    // Tuition workflow not configured in this school. Treat as
+    // "locked" semantically — there's no tuition module to gate on.
+    return { locked: true, stageDisplayName: null }
+  }
+
+  const { data: snaps, error: snapErr } = await supabase
+    .from('tuition_worksheet_snapshots')
+    .select('id, stage_display_name_at_lock')
+    .eq('aye_id', ayeId)
+    .eq('stage_id', stage.id)
+    .limit(1)
+  if (snapErr) throw snapErr
+
+  const snap = snaps?.[0]
+  return {
+    locked: Boolean(snap),
+    stageDisplayName: snap?.stage_display_name_at_lock || stage.display_name,
+  }
 }
 
 function humanModuleLabel(code) {

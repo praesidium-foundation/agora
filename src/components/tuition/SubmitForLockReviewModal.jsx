@@ -1,40 +1,46 @@
 import { useEffect, useState } from 'react'
-import { checkCascadeRules, validateScenarioForLock } from '../../lib/budgetLock'
+import { validateScenarioForLock } from '../../lib/tuitionWorksheet'
 
-// Modal that runs the pre-flight validation for submit-for-lock-review
-// and either confirms the submit (clean pass) or surfaces failures and
-// offers the override path (admin only).
+// Pre-flight modal for submitting a Tuition scenario for lock review.
 //
-// Validation produces failures in two layers:
-//   - in-memory checks (validateScenarioForLock): is_recommended,
-//     non-zero lines, scenario state
-//   - cascade rules (checkCascadeRules): module_instances state for
-//     every required upstream module per school_lock_cascade_rules
+// Mirrors src/components/budget/SubmitLockModal.jsx in shape — runs
+// validateScenarioForLock and either confirms a clean submit or
+// surfaces failures with an admin-only override path.
 //
-// Both lists render together; the user sees the full set in one shot.
+// Tuition has no cascade-rules check at submit time. Per architecture
+// §7.5, Tuition Stage 1 is the upstream module in the cascade chain
+// — it gates Preliminary Budget locks, but nothing gates a Tuition
+// Stage 1 lock. (Stage 2 is gated by Stage 1 being locked, but that's
+// enforced at the Stage 2 setup gateway, not at lock time.) So the
+// failures list is purely the in-memory checks from
+// validateScenarioForLock.
 //
-// Override flow: when admin checks "override and submit anyway", a
-// justification textarea appears (required, non-empty). Submit
-// re-enables only when the textarea has content.
+// Override path: when a non-hardBlock failure exists and the user
+// holds tuition.admin, an "Override and submit" checkbox appears with
+// a required justification textarea. Hard-block failures (sibling
+// locked) hide the override path entirely — the DB trigger would
+// refuse the transition even with admin set.
 //
 // Props:
-//   scenario      — active scenario object
-//   lines         — current line list (validation reads non-zero count)
-//   ayeId         — for cascade rules check
-//   scenarioStage — the active stage (for cross-module cascade check;
-//                    v3.8.10 introduced the Preliminary-Budget-gates-on-
-//                    Tuition-Stage-1 rule which keys on stage_type).
-//                    May be null during stage load — the cross-module
-//                    rule short-circuits to a no-op then.
-//   isAdmin       — boolean; gates override option
-//   onCancel      — () => void
-//   onConfirm     — async ({lockedVia, overrideJustification}) => void;
-//                    parent calls submitScenarioForLockReview
-
-function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, lockedSibling, onCancel, onConfirm }) {
+//   scenario        — active scenario object
+//   isAdmin         — boolean; gates override option (caller passes
+//                     useModulePermission('tuition', 'admin') result)
+//   lockedSibling   — sibling locked scenario or null (from
+//                     findLockedSibling); needed for the hardBlock
+//                     failure
+//   onCancel        — () => void
+//   onConfirm       — async ({lockedVia, overrideJustification}) =>
+//                     void; parent calls submitTuitionScenarioFor
+//                     LockReview RPC and refreshes
+export default function SubmitForLockReviewModal({
+  scenario,
+  isAdmin,
+  lockedSibling,
+  onCancel,
+  onConfirm,
+}) {
   const [validating, setValidating] = useState(true)
-  const [inMemoryFailures, setInMemoryFailures] = useState([])
-  const [cascadeFailures, setCascadeFailures] = useState([])
+  const [failures, setFailures] = useState([])
   const [validationError, setValidationError] = useState(null)
 
   const [overrideMode, setOverrideMode] = useState(false)
@@ -44,28 +50,18 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
 
   useEffect(() => {
     let mounted = true
-    async function run() {
-      setValidating(true)
-      setValidationError(null)
-      try {
-        const inMem = validateScenarioForLock(scenario, lines, lockedSibling)
-        if (!mounted) return
-        setInMemoryFailures(inMem)
-
-        const { failures: cascadeFailing } = await checkCascadeRules(ayeId, {
-          scenarioStageType: scenarioStage?.stage_type || null,
-        })
-        if (!mounted) return
-        setCascadeFailures(cascadeFailing)
-      } catch (e) {
-        if (mounted) setValidationError(e.message || String(e))
-      } finally {
-        if (mounted) setValidating(false)
-      }
+    setValidating(true)
+    setValidationError(null)
+    try {
+      const f = validateScenarioForLock(scenario, lockedSibling)
+      if (mounted) setFailures(f)
+    } catch (e) {
+      if (mounted) setValidationError(e.message || String(e))
+    } finally {
+      if (mounted) setValidating(false)
     }
-    run()
     return () => { mounted = false }
-  }, [scenario, lines, ayeId, lockedSibling, scenarioStage])
+  }, [scenario, lockedSibling])
 
   // Escape-to-close.
   useEffect(() => {
@@ -76,32 +72,16 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
     return () => window.removeEventListener('keydown', onKey)
   }, [onCancel, submitting])
 
-  const totalFailures = inMemoryFailures.length + cascadeFailures.length
-  const hardFailuresExist = totalFailures > 0
-  // Hard-block failures (sibling locked, cross-module Tuition gate,
-  // etc.) cannot be overridden — either the DB trigger would reject
-  // the transition even with admin set, OR the architectural policy
-  // is to require resolution at the upstream (e.g. lock Tuition
-  // first) rather than expose an override. Hide the override path
-  // entirely when any hardBlock is present in either failure list.
-  const hasHardBlock =
-    inMemoryFailures.some((f) => f.hardBlock) ||
-    cascadeFailures.some((f) => f.hardBlock)
-  const onlyWarnings =
-    inMemoryFailures.length === 0 &&
-    cascadeFailures.length > 0 &&
-    cascadeFailures.every((f) => !f.is_required)
+  const hardFailuresExist = failures.length > 0
+  const hasHardBlock = failures.some((f) => f.hardBlock)
 
-  // Submit affordance gating:
-  // - clean pass (no failures): "Submit for Lock Review" enabled
-  // - failures present + admin + override-mode + justification text:
-  //     "Override and submit" enabled (UNLESS a hardBlock failure
-  //     is present — see hasHardBlock above)
-  // - failures present + admin + NOT override-mode: show override
-  //     toggle; submit disabled
-  // - hard-block failure: no override option, submit permanently
-  //     disabled until the upstream condition is resolved
-  // - failures present + non-admin: submit disabled, no override option
+  // Submit affordance gating (parallel to SubmitLockModal):
+  // - clean pass: "Submit for Lock Review" enabled
+  // - failures + admin + override-mode + justification text:
+  //     "Override and submit" enabled (UNLESS hardBlock present)
+  // - failures + admin + NOT override-mode: show toggle; submit disabled
+  // - hard-block: no override option; submit permanently disabled
+  // - failures + non-admin: submit disabled, no override option
   const canCleanSubmit = !hardFailuresExist
   const canOverrideSubmit =
     !hasHardBlock &&
@@ -112,7 +92,11 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
     setSubmitError(null)
     try {
       if (canCleanSubmit) {
-        await onConfirm({ lockedVia: 'normal', overrideJustification: null })
+        // 'cascade' is the normal Tuition lock path (architecture
+        // §7.5 + Migration 024). Tuition has no upstream cascade
+        // requirements today, so 'cascade' here is "no override
+        // needed" — analogous to Budget's 'normal'.
+        await onConfirm({ lockedVia: 'cascade', overrideJustification: null })
       } else if (canOverrideSubmit) {
         await onConfirm({
           lockedVia: 'override',
@@ -123,7 +107,6 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
       setSubmitError(e.message || String(e))
       setSubmitting(false)
     }
-    // On success the parent closes the modal; no need to reset submitting.
   }
 
   return (
@@ -137,11 +120,11 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
         className="bg-cream border-[0.5px] border-card-border rounded-[10px] max-w-xl w-full p-0 shadow-lg max-h-[90vh] overflow-hidden flex flex-col"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="submit-lock-title"
+        aria-labelledby="tuition-submit-lock-title"
       >
         <div className="flex items-center justify-between px-6 pt-5 pb-3 border-b-[0.5px] border-card-border">
           <h3
-            id="submit-lock-title"
+            id="tuition-submit-lock-title"
             className="font-display text-navy text-[18px] leading-tight"
           >
             Submit for Lock Review
@@ -165,11 +148,10 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
               {validationError}
             </p>
           ) : !hardFailuresExist ? (
-            <CleanPassBody scenario={scenario} lines={lines} onlyWarnings={onlyWarnings} cascadeFailures={cascadeFailures} />
+            <CleanPassBody scenario={scenario} />
           ) : (
             <FailuresBody
-              inMemoryFailures={inMemoryFailures}
-              cascadeFailures={cascadeFailures}
+              failures={failures}
               isAdmin={isAdmin}
               hasHardBlock={hasHardBlock}
               overrideMode={overrideMode}
@@ -201,7 +183,7 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
             disabled={submitting || (!canCleanSubmit && !canOverrideSubmit)}
             title={
               hasHardBlock
-                ? 'One or more upstream conditions block submission. See the failure list above; resolve at the source before submitting for lock review.'
+                ? 'A sibling scenario in this (AYE, stage) is locked. Unlock it before submitting this scenario for lock review.'
                 : undefined
             }
             className="bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
@@ -218,77 +200,45 @@ function SubmitLockModal({ scenario, lines, ayeId, scenarioStage, isAdmin, locke
   )
 }
 
-function CleanPassBody({ scenario, lines, onlyWarnings, cascadeFailures }) {
-  const nonZeroCount = lines.filter((l) => Number(l.amount) !== 0).length
+function CleanPassBody({ scenario }) {
   return (
     <>
       <p className="text-body text-sm mb-3 leading-relaxed">
         All validation checks passed. Submitting will move{' '}
         <strong className="font-medium">{scenario.scenario_label}</strong> to{' '}
         <strong className="font-medium">PENDING LOCK REVIEW</strong>. From
-        there, an approver can lock it (creating an immutable snapshot)
-        or reject it back to drafting.
+        there, an approver can lock it (creating an immutable snapshot
+        and tuition schedule for families) or reject it back to drafting.
       </p>
       <ul className="space-y-1 text-sm text-muted">
         <li>✓ Scenario is marked as recommended.</li>
-        <li>✓ {nonZeroCount} line{nonZeroCount === 1 ? '' : 's'} have non-zero amounts.</li>
+        <li>✓ No sibling scenario is currently locked.</li>
+        <li>✓ Tuition inputs are not all zero.</li>
       </ul>
-      {onlyWarnings && cascadeFailures.length > 0 && (
-        <div className="mt-4 px-3 py-2 bg-status-amber-bg border-[0.5px] border-status-amber/30 rounded">
-          <p className="text-status-amber text-sm font-medium mb-1">
-            Cascade warnings (non-blocking):
-          </p>
-          <ul className="text-status-amber text-sm list-disc pl-5 space-y-0.5">
-            {cascadeFailures.map((f, i) => (
-              <li key={i}>{f.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
     </>
   )
 }
 
 function FailuresBody({
-  inMemoryFailures, cascadeFailures, isAdmin, hasHardBlock,
+  failures, isAdmin, hasHardBlock,
   overrideMode, setOverrideMode, justification, setJustification,
 }) {
   return (
     <>
       <p className="text-body text-sm mb-3 leading-relaxed">
         Validation found{' '}
-        {inMemoryFailures.length + cascadeFailures.length} issue
-        {(inMemoryFailures.length + cascadeFailures.length) === 1 ? '' : 's'} that
+        {failures.length} issue
+        {failures.length === 1 ? '' : 's'} that
         normally block submission:
       </p>
 
-      {inMemoryFailures.length > 0 && (
-        <div className="mb-3 px-3 py-2 bg-status-red-bg border-[0.5px] border-status-red/25 rounded">
-          <ul className="text-status-red text-sm list-disc pl-5 space-y-0.5">
-            {inMemoryFailures.map((f, i) => (
-              <li key={i}>{f.message}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {cascadeFailures.length > 0 && (
-        <div className="mb-3 px-3 py-2 bg-status-amber-bg border-[0.5px] border-status-amber/30 rounded">
-          <p className="text-status-amber text-sm font-medium mb-1">
-            Cascade rules:
-          </p>
-          <ul className="text-status-amber text-sm list-disc pl-5 space-y-0.5">
-            {cascadeFailures.map((f, i) => (
-              <li key={i}>
-                {f.message}
-                {!f.is_required && (
-                  <span className="italic text-muted"> (warning only)</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <div className="mb-3 px-3 py-2 bg-status-red-bg border-[0.5px] border-status-red/25 rounded">
+        <ul className="text-status-red text-sm list-disc pl-5 space-y-0.5">
+          {failures.map((f, i) => (
+            <li key={i}>{f.message}</li>
+          ))}
+        </ul>
+      </div>
 
       {hasHardBlock ? (
         <p className="text-muted italic text-sm">
@@ -324,17 +274,17 @@ function FailuresBody({
           {overrideMode && (
             <div className="mt-3">
               <label
-                htmlFor="override-justification"
+                htmlFor="tuition-override-justification"
                 className="block font-body text-[11px] text-muted uppercase tracking-wider mb-1.5"
               >
                 Justification (required)
               </label>
               <textarea
-                id="override-justification"
+                id="tuition-override-justification"
                 value={justification}
                 onChange={(e) => setJustification(e.target.value)}
                 rows={3}
-                placeholder="e.g. Tuition Worksheet not yet available in the platform; locking with current scenario data."
+                placeholder="e.g. Tuition Committee approved this scenario verbally; documented in March meeting minutes."
                 className="w-full bg-white border-[0.5px] border-card-border text-body px-3 py-2 rounded text-sm focus:border-navy focus:outline-none"
                 required
               />
@@ -345,5 +295,3 @@ function FailuresBody({
     </>
   )
 }
-
-export default SubmitLockModal

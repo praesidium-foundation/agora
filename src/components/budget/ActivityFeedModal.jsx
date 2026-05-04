@@ -9,31 +9,29 @@ import {
 //
 // Phase 2 polish (v3.6) relocated this from a cream-highlight banner
 // above the budget detail to a "Recent Activity" link in the scenario
-// tabs row. The link opens this modal. The internal feed UI (count
-// dropdown, filter dropdown, FeedRow list, PDF export link) is
-// unchanged from the prior inline-panel version — only the shell
-// changed (panel → modal).
+// tabs row. The link opens this modal.
 //
-// Why a modal: visual weight reduction. The cream-highlight banner
-// competed with the Income heading; a right-aligned text link in the
-// tabs row is appropriately sized for an audit affordance, and the
-// modal pattern matches LineHistoryModal / SubmitLockModal — the
-// established convention for "open a focused governance surface".
+// v3.8.10 (Tuition-D) generalized this from Budget-only to
+// module-aware. Tuition reuses this exact component (mounted from
+// TuitionWorksheet); the only per-module varying piece is the
+// `moduleId` prop, which selects which scenario/line tables to read
+// via MODULE_AUDIT_CONFIGS in src/lib/auditLog.js. The PDF export
+// link is also moduleId-aware so the print route differs per module
+// (Budget → /print/budget/.../activity; Tuition → not yet wired,
+// renders as a text-only "(PDF in a future commit)").
 //
 // Props:
+//   moduleId     — 'budget' | 'tuition' (selects audit config)
 //   scenarioId   — uuid of the active scenario; refetches when it changes
 //   accountsById — { [account_id]: { code, name } } map for resolving
 //                  line events into "Curriculum/Book Fees ($0 → $9,750)"
-//                  format. BudgetStage already loads accounts; pass
-//                  through.
+//                  format. Budget passes through; Tuition passes null.
 //   onClose      — () => void
 //
-// Filter state and count selections are local to the modal session —
-// closing and reopening resets to defaults (25 events, all activity).
-// PDF export goes through /print/budget/:scenarioId/activity which
-// fetches its own data; in-app filter state is NOT transmitted to the
-// print route (architectural commitment: PDFs are reproducible from
-// the URL alone).
+// Filter state and count selections are local to the modal session.
+// PDF export (when present) goes through the per-module print route
+// which fetches its own data; in-app filter state is NOT transmitted
+// to the print route.
 
 const COUNT_OPTIONS = [
   { value: 10,    label: '10' },
@@ -63,7 +61,7 @@ function passesFilter(event, filter) {
   return true
 }
 
-export default function ActivityFeedModal({ scenarioId, accountsById, onClose }) {
+export default function ActivityFeedModal({ moduleId = 'budget', scenarioId, accountsById, onClose }) {
   const [count, setCount] = useState(25)
   const [filter, setFilter] = useState('all')
   const [events, setEvents] = useState(null)
@@ -86,7 +84,7 @@ export default function ActivityFeedModal({ scenarioId, accountsById, onClose })
     let mounted = true
     ;(async () => {
       try {
-        const all = await fetchScenarioActivity(scenarioId, {
+        const all = await fetchScenarioActivity(moduleId, scenarioId, {
           limit: null,
           accountsById,
         })
@@ -98,7 +96,7 @@ export default function ActivityFeedModal({ scenarioId, accountsById, onClose })
     return () => { mounted = false }
     // accountsById intentionally omitted: only re-fetch on scenarioId change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenarioId])
+  }, [moduleId, scenarioId])
 
   // Fetch the displayed slice when count/filter/scenarioId changes.
   useEffect(() => {
@@ -109,7 +107,7 @@ export default function ActivityFeedModal({ scenarioId, accountsById, onClose })
     ;(async () => {
       try {
         const fetchLimit = count == null ? null : Math.max(count * 3, count)
-        const all = await fetchScenarioActivity(scenarioId, {
+        const all = await fetchScenarioActivity(moduleId, scenarioId, {
           limit: fetchLimit,
           accountsById,
         })
@@ -124,7 +122,7 @@ export default function ActivityFeedModal({ scenarioId, accountsById, onClose })
     return () => { mounted = false }
     // accountsById intentionally omitted (see note above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenarioId, count, filter])
+  }, [moduleId, scenarioId, count, filter])
 
   const headerCount =
     totalKnownEvents == null
@@ -200,14 +198,23 @@ export default function ActivityFeedModal({ scenarioId, accountsById, onClose })
               ))}
             </select>
           </div>
-          <a
-            href={`/print/budget/${scenarioId}/activity`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-body text-status-blue hover:underline text-[12px]"
-          >
-            Export as PDF
-          </a>
+          {moduleId === 'budget' ? (
+            <a
+              href={`/print/budget/${scenarioId}/activity`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-body text-status-blue hover:underline text-[12px]"
+            >
+              Export as PDF
+            </a>
+          ) : (
+            // Per-module print routes are added when each module's
+            // print surface ships. Tuition's print routes are queued
+            // for Tuition-E.
+            <span className="font-body text-muted italic text-[12px]">
+              PDF export ships in a future commit
+            </span>
+          )}
         </div>
 
         <div className="px-6 py-4 overflow-y-auto flex-1">

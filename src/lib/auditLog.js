@@ -1,9 +1,17 @@
-// Audit-log query helpers for the Budget module.
+// Audit-log query helpers (module-aware as of v3.8.10).
 //
 // Source of truth: the `change_log` table, populated by tg_log_changes()
-// (Migration 001) which is attached to budget_stage_scenarios and
-// budget_stage_lines (Migration 011) plus budget_snapshots and
-// budget_snapshot_lines.
+// (Migration 001) which is attached to every scenario / line / snapshot
+// table whose changes should appear in the per-scenario activity feed.
+//
+// v3.8.10 (Tuition-D) generalized this file from Budget-only to
+// module-aware. The shape of the audit data is identical across
+// modules — every scenario has a header table and a child table whose
+// rows belong to a scenario via scenario_id — so the helpers that
+// classify, group, and render events stay shared. The only piece
+// that varies per module is the table-name pair (scenarios + child
+// rows) and the optional account-resolution map. That variation is
+// captured in MODULE_AUDIT_CONFIGS below.
 //
 // Trigger semantics (verified against Migration 001):
 //   - INSERT  → 1 row, field_name = '__insert__', new_value = full row jsonb
@@ -18,8 +26,9 @@
 // `fields` array so consumers can render diffs.
 //
 // Read access is gated by RLS — the change_log_read policy (Migration
-// 011) requires `current_user_has_module_perm('budget', 'view')` for
-// the four budget tables. Callers don't need to add their own check.
+// 023's rebuild adds tuition_worksheet_scenarios + family_details +
+// snapshots to the existing budget arms). Callers don't need to add
+// their own permission check.
 //
 // User-name resolution: change_log only stores `changed_by` as a uuid.
 // Helpers resolve those uuids to display names via user_profiles in a
@@ -28,18 +37,47 @@
 
 import { supabase } from './supabase'
 
+// ============================================================================
+// Module audit configs.
+//
+// One entry per module with audit-feed support. Used by
+// fetchScenarioActivity to know which tables to query.
+//
+// Schema:
+//   scenarioTable    — the scenario header table (1 row per scenario)
+//   lineTable        — the per-row child table whose insert events are
+//                      filtered by scenario_id to enumerate the line
+//                      ids belonging to a scenario. May be NULL for
+//                      modules where the scenario has no child rows
+//                      (e.g. the Tuition Stage 1 scenario row carries
+//                      its data inline in jsonb columns; there is no
+//                      separate line table at Stage 1).
+//
+// Adding a new module's audit feed: add an entry here, attach
+// tg_log_changes to its scenario + line tables (if applicable), and
+// extend the change_log_read RLS policy to include the new tables.
+// ============================================================================
+export const MODULE_AUDIT_CONFIGS = {
+  budget: {
+    scenarioTable: 'budget_stage_scenarios',
+    lineTable:     'budget_stage_lines',
+  },
+  tuition: {
+    scenarioTable: 'tuition_worksheet_scenarios',
+    // Stage 1 has no per-row child table (configuration lives inline
+    // in jsonb columns on the scenario row). Stage 2 has
+    // tuition_worksheet_family_details, but per architecture §3.6
+    // family-details rows are gated by can_view_family_details and
+    // would need a separate audit affordance per RLS — out of scope
+    // for the v3.8.10 generalization. Setting lineTable to null
+    // means fetchScenarioActivity skips the line-enumeration step
+    // for tuition; the activity feed shows scenario-row events only,
+    // which is the right granularity for Stage 1 anyway.
+    lineTable:     null,
+  },
+}
+
 // Group fan-out UPDATE rows into single logical events.
-//
-// A blur-save that touched multiple fields in one UPDATE produces N
-// rows from the trigger, all sharing (target_table, target_id,
-// changed_by, changed_at). We collapse them into one event per group
-// with a `fields` array describing each field-level change.
-//
-// Coalesce window for grouping: rows with the same composite key but
-// changed_at differing by ≤ 1ms are still treated as the same event
-// (handles the rare edge case where the timestamp's microsecond
-// component differs). Anything beyond 1ms is treated as a separate
-// event, which is the correct call for distinct user actions.
 function groupChangeLogRows(rows) {
   const events = []
   let current = null
@@ -99,29 +137,10 @@ function groupChangeLogRows(rows) {
 //   'unlock_withdrawn'    — unlock workflow: requester withdrew their own request
 //   'amount'              — pure amount change on a budget line
 //   'edit'                — anything else (notes, label, description, etc.)
-//
-// Unlock events are detected via `event.reason` (set by app.change_reason
-// in the H1 RPC functions) BEFORE field-based heuristics, because
-// unlock_completed transitions state from 'locked' → 'drafting' which
-// doesn't match any of the existing state-based patterns and would
-// otherwise fall through to 'edit'. Reason values:
-//   'unlock_requested'             → kind 'unlock_requested'
-//   'unlock_first_approval'        → kind 'unlock_first_approval'
-//   'unlock_completed'             → kind 'unlock_completed'
-//   'unlock_rejected: <text>'      → kind 'unlock_rejected'
-//   'unlock_withdrawn: <text>'     → kind 'unlock_withdrawn'
-//
-// Multiple categories can apply to one event (a lock event also has
-// state change AND locked_at AND locked_by AND locked_via in its
-// fields list); we report the highest-priority single category in
-// `kind` and let the renderer drill into `fields` for finer detail.
 export function classifyEvent(event) {
   const fields = event.fields
   const fieldByName = Object.fromEntries(fields.map((f) => [f.field_name, f]))
 
-  // Unlock workflow signatures take priority — they're identified by
-  // the change_log.reason value rather than by field-shape, so they
-  // need to be checked before state-transition heuristics.
   if (event.reason) {
     if (event.reason === 'unlock_requested')      return 'unlock_requested'
     if (event.reason === 'unlock_first_approval') return 'unlock_first_approval'
@@ -154,11 +173,6 @@ export function classifyEvent(event) {
   return 'edit'
 }
 
-// Extract the user-supplied reason text from a 'unlock_rejected' or
-// 'unlock_withdrawn' event's reason marker. H1's reject function
-// builds the reason as 'unlock_rejected: <text>' or
-// 'unlock_withdrawn: <text>'; this strips the prefix and returns the
-// raw user text. Returns empty string if no marker present.
 export function extractUnlockReasonText(event) {
   if (!event?.reason) return ''
   const colonIdx = event.reason.indexOf(': ')
@@ -167,8 +181,6 @@ export function extractUnlockReasonText(event) {
 }
 
 // Resolve a set of user uuids to { id → full_name } via user_profiles.
-// Single batch query. Missing or null ids return an empty map for
-// those keys.
 async function resolveUserNames(userIds) {
   const ids = [...new Set(userIds.filter(Boolean))]
   if (ids.length === 0) return {}
@@ -182,9 +194,14 @@ async function resolveUserNames(userIds) {
 
 // Fetch grouped events touching a single budget_stage_lines row.
 //
-// Returns an array of events, newest first, with `changed_by_name`
-// resolved. Each event has fields = [{ field_name, old_value,
-// new_value }, ...] and a `kind` from classifyEvent.
+// Budget-only today — line-level history is a per-line affordance
+// that only makes sense for modules whose scenarios have a child
+// line table (Budget). Tuition Stage 1 has no line table; Stage 2's
+// family_details rows have row-level audit but a different
+// permission model (gated by can_view_family_details) and a
+// different UI treatment. When/if Tuition Stage 2 grows a per-row
+// history modal, this function generalizes the same way
+// fetchScenarioActivity did.
 export async function fetchLineHistory(lineId) {
   const { data, error } = await supabase
     .from('change_log')
@@ -195,9 +212,6 @@ export async function fetchLineHistory(lineId) {
     .order('field_name', { ascending: true })
   if (error) throw error
 
-  // Order rows: newest first by changed_at, then stable by field_name
-  // within each timestamp so the grouping pass below sees same-event
-  // rows adjacent. The sort above already accomplishes this.
   const events = groupChangeLogRows(data || [])
   for (const e of events) e.kind = classifyEvent(e)
 
@@ -209,48 +223,52 @@ export async function fetchLineHistory(lineId) {
 }
 
 // Fetch grouped events for an entire scenario: the scenario row itself
-// plus every budget_stage_lines row belonging to it.
+// plus every line row belonging to it (when the module has a line
+// table; see MODULE_AUDIT_CONFIGS).
 //
-// Two-step query because change_log doesn't carry scenario_id directly:
-//   1. Get all line ids for the scenario (lines, even soft-deleted ones,
-//      via change_log __insert__ rows — but the simpler path is to
-//      resolve membership via the live budget_stage_lines table for
-//      currently-existing lines, which covers ~all of governance value).
-//   2. Pull change_log rows for that scenario's row id PLUS the line ids.
+// v3.8.10 generalization: first arg is now `moduleId` (e.g. 'budget',
+// 'tuition'). Existing Budget call sites must pass 'budget' as the
+// first arg.
 //
-// `limit` caps the result count after grouping (i.e., events, not raw
-// rows). `null` / undefined means no limit.
+// `limit` caps the result count after grouping. `null`/undefined =
+// no limit. `accountsById` (optional) — a map of account_id →
+// { code, name } used to render account labels in line events; only
+// applicable to budget. Pass null for modules without a line table.
 //
 // Returns events newest-first with `changed_by_name` and `kind`
 // resolved. Each event also carries `target_kind`: 'scenario' | 'line'
 // so the renderer knows which family of activity it's looking at.
-//
-// `accountsById` (optional) — a map of account_id → { code, name }
-// used to render "Curriculum/Book Fees" in line events instead of a
-// raw uuid. Pass it from the caller (BudgetStage already has accounts
-// loaded). When a line's account_id resolves through this map, the
-// event gets `account_code` and `account_name` attached for display.
-export async function fetchScenarioActivity(scenarioId, { limit = null, accountsById = null } = {}) {
+export async function fetchScenarioActivity(moduleId, scenarioId, { limit = null, accountsById = null } = {}) {
+  const config = MODULE_AUDIT_CONFIGS[moduleId]
+  if (!config) {
+    throw new Error(`fetchScenarioActivity: unknown moduleId "${moduleId}". Add an entry to MODULE_AUDIT_CONFIGS.`)
+  }
+  const { scenarioTable, lineTable } = config
+
   // Step 1: Get every line id that's ever been associated with this
-  // scenario. We read from change_log directly so deleted lines remain
-  // visible in the activity feed (audit history shouldn't disappear
-  // when a line is removed — the deletion itself is a logged event).
-  const { data: lineInsertRows, error: insertErr } = await supabase
-    .from('change_log')
-    .select('target_id, new_value')
-    .eq('target_table', 'budget_stage_lines')
-    .eq('field_name', '__insert__')
-  if (insertErr) throw insertErr
+  // scenario. Skip when the module has no line table.
+  let lineIds = []
+  if (lineTable) {
+    const { data: lineInsertRows, error: insertErr } = await supabase
+      .from('change_log')
+      .select('target_id, new_value')
+      .eq('target_table', lineTable)
+      .eq('field_name', '__insert__')
+    if (insertErr) throw insertErr
 
-  const lineIds = (lineInsertRows || [])
-    .filter((r) => r.new_value && r.new_value.scenario_id === scenarioId)
-    .map((r) => r.target_id)
+    lineIds = (lineInsertRows || [])
+      .filter((r) => r.new_value && r.new_value.scenario_id === scenarioId)
+      .map((r) => r.target_id)
+  }
 
-  // Step 2: Pull all change_log rows for the scenario row + its lines.
+  // Step 2: Pull all change_log rows for the scenario row + its lines
+  // (if any).
   const targets = [
-    { table: 'budget_stage_scenarios', ids: [scenarioId] },
-    { table: 'budget_stage_lines', ids: lineIds },
+    { table: scenarioTable, ids: [scenarioId] },
   ]
+  if (lineTable) {
+    targets.push({ table: lineTable, ids: lineIds })
+  }
 
   const queries = targets.map(({ table, ids }) => {
     if (ids.length === 0) return Promise.resolve({ data: [], error: null })
@@ -271,7 +289,6 @@ export async function fetchScenarioActivity(scenarioId, { limit = null, accounts
       const at = new Date(a.changed_at).getTime()
       const bt = new Date(b.changed_at).getTime()
       if (bt !== at) return bt - at
-      // Secondary sort to keep grouping stable within a millisecond.
       if (a.target_id !== b.target_id) return a.target_id < b.target_id ? -1 : 1
       return a.field_name < b.field_name ? -1 : 1
     })
@@ -279,13 +296,10 @@ export async function fetchScenarioActivity(scenarioId, { limit = null, accounts
   const events = groupChangeLogRows(allRows)
   for (const e of events) {
     e.kind = classifyEvent(e)
-    e.target_kind = e.target_table === 'budget_stage_scenarios' ? 'scenario' : 'line'
+    e.target_kind = e.target_table === scenarioTable ? 'scenario' : 'line'
 
-    // Account label resolution for line events.
+    // Account label resolution for line events (budget only).
     if (e.target_kind === 'line' && accountsById) {
-      // For inserts we know the account_id from new_value; for updates
-      // we need to look it up from the live row. We don't have the live
-      // row here, so we cache account_id per line on first sighting.
       const insertField = e.fields.find((f) => f.field_name === '__insert__')
       const deleteField = e.fields.find((f) => f.field_name === '__delete__')
       const accountId =
@@ -301,9 +315,7 @@ export async function fetchScenarioActivity(scenarioId, { limit = null, accounts
     }
   }
 
-  // Second-pass account resolution: for line events whose account
-  // wasn't found on insert/delete (i.e., pure UPDATE-only events),
-  // backfill from any other event on the same line that DID resolve.
+  // Second-pass account resolution.
   if (accountsById) {
     const resolvedByLine = {}
     for (const e of events) {
@@ -330,8 +342,8 @@ export async function fetchScenarioActivity(scenarioId, { limit = null, accounts
   return limit ? events.slice(0, limit) : events
 }
 
-// Format a USD amount the same way as the budget detail. Local copy so
-// auditLog has no dependency on the tree library.
+// ----- Per-field humanizer + per-event summarizer -------------------------
+
 const usd0 = new Intl.NumberFormat('en-US', {
   style: 'currency',
   currency: 'USD',
@@ -342,20 +354,6 @@ function fmtUsd(n) {
   return usd0.format(Number(n))
 }
 
-// Humanize a single field-change for display. Returns a short string
-// suitable for an inline diff cell. Caller controls visual treatment
-// via the event-level `kind`.
-//
-// Special-cased fields:
-//   amount                       — "$0 → $5,000"
-//   state                        — "drafting → pending_lock_review"
-//   is_recommended               — "marked recommended" / "unmarked recommended"
-//   locked_via                   — "lock method: normal" / "lock method: override"
-//   override_justification       — "justification: <text>"
-//   __insert__                   — "Created"
-//   __delete__                   — "Deleted"
-//
-// Fallback: "<field>: <old> → <new>" for anything else.
 export function describeField(field) {
   const { field_name, old_value, new_value } = field
   if (field_name === '__insert__') return 'Created'
@@ -387,19 +385,11 @@ export function describeField(field) {
   if (field_name === 'notes') {
     return `notes updated`
   }
-  // Fallback for fields we haven't special-cased.
   const o = old_value === null || old_value === undefined ? '∅' : JSON.stringify(old_value)
   const n = new_value === null || new_value === undefined ? '∅' : JSON.stringify(new_value)
   return `${field_name}: ${o} → ${n}`
 }
 
-// Build a one-line summary of an event for the activity feed (where
-// each event renders as a single row, not an expanded diff list).
-//
-// For 'amount' events on a line: "Curriculum/Book Fees: $0 → $9,750".
-// For 'lock' events: "Scenario locked".
-// For 'override' events: "Lock submitted with override".
-// Etc.
 export function summarizeEvent(event) {
   const accountLabel =
     event.account_code && event.account_name
@@ -431,9 +421,6 @@ export function summarizeEvent(event) {
     case 'override':
       return `Lock submitted with override`
     case 'unlock_requested': {
-      // Justification was set on this UPDATE; trigger captured the
-      // null → '<text>' diff. Render it inline (no truncation —
-      // §9.1 commitment, parallel to override events).
       const f = event.fields.find((x) => x.field_name === 'unlock_request_justification')
       const justification = f && f.new_value ? String(f.new_value) : null
       return justification
@@ -445,8 +432,6 @@ export function summarizeEvent(event) {
     case 'unlock_completed':
       return `Unlock approved. Scenario returned to drafting.`
     case 'unlock_rejected': {
-      // Reason text is folded into change_log.reason as
-      // 'unlock_rejected: <text>'; extract via the helper.
       const reasonText = extractUnlockReasonText(event)
       return reasonText
         ? `Unlock request rejected. Reason: "${reasonText}"`
@@ -464,8 +449,6 @@ export function summarizeEvent(event) {
     }
     case 'edit':
     default: {
-      // Pick the first non-system field for the summary; fall back to
-      // the count if multiple fields changed.
       const real = event.fields.filter(
         (f) => f.field_name !== '__insert__' && f.field_name !== '__delete__'
       )
@@ -481,10 +464,6 @@ export function summarizeEvent(event) {
   }
 }
 
-// Format a relative or absolute timestamp for the activity feed.
-//
-// Relative for the past 7 days ("5 minutes ago", "2 hours ago",
-// "yesterday"); absolute for older ("Apr 15, 2026").
 export function formatActivityTimestamp(iso) {
   const t = new Date(iso)
   const now = new Date()
