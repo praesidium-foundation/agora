@@ -31,9 +31,9 @@ import TuitionFamilyDetailsTable from '../../components/tuition/TuitionFamilyDet
 //   1. No Stage 1 lock for the AYE → empty-state cascade-blocked
 //      message (TuitionAuditEmptyState).
 //   2. Stage 1 IS locked, but no Stage 2 scenario exists → empty-
-//      state "ready to set up" message + "Set up Audit from {Stage 1
-//      label}" button (calls create_tuition_scenario_from_snapshot
-//      RPC, seeding the Stage 2 scenario from the most-recent locked
+//      state "ready to set up" message + "Begin Tuition Audit"
+//      button (calls create_tuition_scenario_from_snapshot RPC,
+//      seeding the Stage 2 scenario from the most-recent locked
 //      Stage 1 snapshot).
 //   3. Stage 2 scenario exists → render TuitionFamilyDetailsTable
 //      with the family rows.
@@ -534,7 +534,7 @@ function SetupFromStage1Card({
           className="inline-block bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
           title={!canEdit ? 'Tuition edit permission required to set up Stage 2.' : undefined}
         >
-          {seeding ? 'Setting up…' : `Set up Audit from ${stage1DisplayName}`}
+          {seeding ? 'Setting up…' : 'Begin Tuition Audit'}
         </button>
       </div>
     </div>
