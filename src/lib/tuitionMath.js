@@ -466,3 +466,183 @@ export function computeBreakevenEnrollment(scenario, expenseComparator) {
   const numer = Number(expenseComparator) + fixedEnvelopes
   return Math.ceil(numer / denom)
 }
+
+// ============================================================================
+// v3.8.14 (Tuition-B2a) — Stage 2 per-family row computation helpers.
+//
+// Used by the per-family editor (TuitionFamilyDetailsTable) for the
+// five computed columns (Base Tuition, Multi-Student Discount, Net
+// Tuition Rate, Subtotal Tuition for Year, NET Tuition for YEAR) and
+// by the override-detection logic that drives the gold-dot indicator.
+//
+// Faculty discount rule (architecture §7.3 + Appendix C v3.8.14):
+//   The standard rule is that faculty discount REPLACES multi-student
+//   tier discount. Faculty families are charged base_rate × students ×
+//   (1 - faculty_discount_pct/100); the multi-student tier discount
+//   does NOT apply. Implementation:
+//     - applied_tier_size resolves to 1 for faculty families
+//     - applied_tier_rate resolves to base_rate for faculty families
+//     - Multi-Student Discount renders $0 for faculty families
+//     - faculty_discount_amount auto-populates from base × students × pct
+//
+//   Manual overrides (faculty_discount_amount, applied_tier_rate)
+//   stored on the family row take precedence over the auto-computed
+//   values. The isFamily*Overridden helpers compare stored vs.
+//   auto-computed to drive the gold-dot indicator.
+// ============================================================================
+
+// Resolve a per-tier rate from the scenario's tier_rates jsonb. Walks
+// the rows looking for tier_size === target; returns base rate (tier 1)
+// if no match.
+function getTierRateForSize(scenario, tierSize) {
+  const rates = Array.isArray(scenario?.tier_rates) ? scenario.tier_rates : []
+  const t1 = rates.find((r) => Number(r.tier_size) === 1)
+  const baseRate = t1 ? Number(t1.per_student_rate) || 0 : 0
+  if (tierSize === 1) return baseRate
+  const match = rates.find((r) => Number(r.tier_size) === Number(tierSize))
+  return match ? Number(match.per_student_rate) || 0 : baseRate
+}
+
+// Natural per-student rate for a family — what the rate WOULD be
+// based on is_faculty_family and students_enrolled, before any manual
+// override. Faculty families: base rate. Non-faculty: tier rate at
+// students_enrolled (or top-tier rate if students_enrolled exceeds
+// the highest configured tier).
+function naturalPerStudentRate(family, scenario) {
+  const baseRate = getTierRateForSize(scenario, 1)
+  if (family?.is_faculty_family) return baseRate
+  const students = Number(family?.students_enrolled) || 0
+  if (students <= 0) return null
+  // Resolve the tier_size that applies. Top-tier rate covers
+  // students_enrolled at or above the top tier_size in the config.
+  const rates = Array.isArray(scenario?.tier_rates) ? scenario.tier_rates : []
+  if (rates.length === 0) return baseRate
+  const sortedSizes = rates
+    .map((r) => Number(r.tier_size))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b)
+  if (sortedSizes.length === 0) return baseRate
+  const topSize = sortedSizes[sortedSizes.length - 1]
+  const targetSize = students >= topSize ? topSize : students
+  return getTierRateForSize(scenario, targetSize)
+}
+
+// Family's applied tier rate — the rate actually used for billing.
+// Returns the manual override (stored applied_tier_rate) if set;
+// otherwise returns the natural rate.
+//
+// Returns null if students_enrolled is null / 0 (insufficient input
+// to compute) — the editor renders em-dash in that case.
+export function computeFamilyAppliedTierRate(family, scenario) {
+  if (family?.applied_tier_rate != null) {
+    return Number(family.applied_tier_rate)
+  }
+  return naturalPerStudentRate(family, scenario)
+}
+
+// Multi-Student Discount for a family. Faculty families: 0 (the
+// rule does not apply). Non-faculty families: (base_rate -
+// applied_tier_rate) × students_enrolled.
+//
+// Returns null if applied_tier_rate or students_enrolled are
+// insufficient.
+export function computeFamilyMultiStudentDiscount(family, scenario) {
+  if (family?.is_faculty_family) return 0
+  const students = Number(family?.students_enrolled) || 0
+  if (students <= 0) return null
+  const applied = computeFamilyAppliedTierRate(family, scenario)
+  if (applied == null) return null
+  const baseRate = getTierRateForSize(scenario, 1)
+  return (baseRate - applied) * students
+}
+
+// Auto-computed faculty discount amount — what the value WOULD be
+// based on is_faculty_family / students_enrolled / base_rate /
+// faculty_discount_pct, before any manual override.
+//
+// Returns null when is_faculty_family is false (the field doesn't
+// apply) OR when inputs are insufficient.
+export function computeFamilyFacultyDiscountAuto(family, scenario) {
+  if (!family?.is_faculty_family) return null
+  const students = Number(family?.students_enrolled) || 0
+  if (students <= 0) return null
+  const baseRate = getTierRateForSize(scenario, 1)
+  if (baseRate <= 0) return null
+  const pct = Number(scenario?.faculty_discount_pct)
+  if (!Number.isFinite(pct)) return null
+  return baseRate * students * (pct / 100)
+}
+
+// NET Tuition for the YEAR — the bottom-right number for each family.
+// Subtotal − faculty − other − financial aid, treating null
+// discount fields as zero (they have not been allocated).
+//
+// Returns null if the subtotal cannot be computed.
+export function computeFamilyNetTuition(family, scenario) {
+  const students = Number(family?.students_enrolled) || 0
+  if (students <= 0) return null
+  const applied = computeFamilyAppliedTierRate(family, scenario)
+  if (applied == null) return null
+  const subtotal = applied * students
+  const faculty = Number(family?.faculty_discount_amount) || 0
+  const other = Number(family?.other_discount_amount) || 0
+  const fa = Number(family?.financial_aid_amount) || 0
+  return subtotal - faculty - other - fa
+}
+
+// Override detection — is the stored faculty_discount_amount different
+// from the auto-computed value? Drives the gold-dot indicator on the
+// Faculty Discount cell.
+//
+// Returns false when the field doesn't apply (non-faculty family) OR
+// when the stored and auto values match within rounding tolerance.
+//
+// "Within rounding tolerance" = strictly equal as numbers; the auto
+// computation is deterministic and the editor stores the auto value
+// directly when toggling, so any divergence is an explicit operator
+// override.
+export function isFamilyFacultyDiscountOverridden(family, scenario) {
+  if (!family?.is_faculty_family) return false
+  if (family?.faculty_discount_amount == null) return false
+  const auto = computeFamilyFacultyDiscountAuto(family, scenario)
+  if (auto == null) return false
+  return Number(family.faculty_discount_amount) !== Number(auto)
+}
+
+// Override detection for applied_tier_rate. Returns true when the
+// stored applied_tier_rate diverges from the natural rate for the
+// family's current is_faculty_family / students_enrolled.
+//
+// Returns false when there is no stored applied_tier_rate (the
+// editor would compute and display the natural rate; no override).
+export function isFamilyTierRateOverridden(family, scenario) {
+  if (family?.applied_tier_rate == null) return false
+  const natural = naturalPerStudentRate(family, scenario)
+  if (natural == null) return false
+  return Number(family.applied_tier_rate) !== Number(natural)
+}
+
+// Resolve the natural applied_tier_size for a family — used by the
+// save-path cascade when toggling is_faculty_family or changing
+// students_enrolled. Faculty families: 1. Non-faculty: capped at the
+// top configured tier_size.
+export function naturalAppliedTierSize(family, scenario) {
+  if (family?.is_faculty_family) return 1
+  const students = Number(family?.students_enrolled) || 1
+  const rates = Array.isArray(scenario?.tier_rates) ? scenario.tier_rates : []
+  if (rates.length === 0) return Math.max(1, students)
+  const sortedSizes = rates
+    .map((r) => Number(r.tier_size))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b)
+  if (sortedSizes.length === 0) return Math.max(1, students)
+  const topSize = sortedSizes[sortedSizes.length - 1]
+  return students >= topSize ? topSize : Math.max(1, students)
+}
+
+// Public — exported for the save-path cascade in TuitionAuditPage.
+// Same math as naturalPerStudentRate but exported so the page can
+// recompute when applying tier changes.
+export function naturalAppliedTierRate(family, scenario) {
+  return naturalPerStudentRate(family, scenario)
+}

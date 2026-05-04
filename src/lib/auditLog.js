@@ -222,6 +222,49 @@ export async function fetchLineHistory(lineId) {
   return events
 }
 
+// v3.8.14 (Tuition-B2a): per-family notes history. Targeted lookup
+// of every change_log event that touched the `notes` column on a
+// single tuition_worksheet_family_details row, plus the row's
+// __insert__ event so the modal shows row creation alongside notes
+// edits.
+//
+// Filters the change_log to:
+//   target_table = 'tuition_worksheet_family_details'
+//   target_id    = familyId
+//   field_name   in ('notes', '__insert__', '__delete__')
+//
+// Returns events newest-first with `changed_by_name` and `kind`
+// resolved. Used by TuitionFamilyHistoryModal — the per-row clock
+// affordance on the Stage 2 editor (mirrors LineHistoryModal in
+// purpose, scoped to a different field and a different table).
+//
+// Why a focused helper rather than reusing fetchLineHistory: that
+// helper is hardcoded to budget_stage_lines and shows ALL field
+// changes; here we want only notes events on a tuition family row.
+// The other audit-feed surfaces (full activity feed for a tuition
+// scenario, including all family-row events) are queued for B2b
+// when the activity feed query needs to span family_details.
+export async function fetchFamilyNotesHistory(familyId) {
+  const { data, error } = await supabase
+    .from('change_log')
+    .select('target_table, target_id, field_name, old_value, new_value, changed_by, changed_at, reason')
+    .eq('target_table', 'tuition_worksheet_family_details')
+    .eq('target_id', familyId)
+    .in('field_name', ['notes', '__insert__', '__delete__'])
+    .order('changed_at', { ascending: false })
+    .order('field_name', { ascending: true })
+  if (error) throw error
+
+  const events = groupChangeLogRows(data || [])
+  for (const e of events) e.kind = classifyEvent(e)
+
+  const userMap = await resolveUserNames(events.map((e) => e.changed_by))
+  for (const e of events) {
+    e.changed_by_name = userMap[e.changed_by] || null
+  }
+  return events
+}
+
 // Fetch grouped events for an entire scenario: the scenario row itself
 // plus every line row belonging to it (when the module has a line
 // table; see MODULE_AUDIT_CONFIGS).
