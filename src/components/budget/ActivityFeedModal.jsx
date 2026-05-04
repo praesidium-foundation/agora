@@ -57,7 +57,11 @@ function passesFilter(event, filter) {
       // v3.8.17: tuition snapshot capture is an operator-driven
       // governance-flavored event — preserves state at a reference
       // point even though it doesn't change scenario state.
-      'snapshot_captured'].includes(event.kind)
+      'snapshot_captured',
+      // v3.8.18: tuition bulk import accept/reject — operator-driven
+      // events with material data consequences (accept commits rows;
+      // reject is a recorded decline). Belong in governance bucket.
+      'import_accepted', 'import_rejected'].includes(event.kind)
   }
   if (filter === 'edits') {
     return ['amount', 'edit', 'insert', 'delete'].includes(event.kind)
@@ -282,6 +286,12 @@ function FeedRow({ event }) {
     // Gold rule (the brand "operator reference" treatment) —
     // distinct from blue/lock and amber/in-progress.
     snapshot_captured:       'border-gold bg-cream-highlight/30',
+    // v3.8.18 (Tuition-B2-import): bulk import events. Accept gets
+    // a green left rule (material data addition, like the per-line
+    // 'insert' treatment); reject gets a muted treatment
+    // (declined-without-effect, similar to unlock_withdrawn).
+    import_accepted:         'border-status-green bg-status-green-bg/20',
+    import_rejected:         'border-card-border bg-cream-highlight/40',
   }
   const cls = treatments[event.kind] || 'border-card-border'
   const isGov = [
@@ -289,6 +299,7 @@ function FeedRow({ event }) {
     'unlock_requested', 'unlock_first_approval', 'unlock_completed',
     'unlock_rejected', 'unlock_withdrawn',
     'snapshot_captured',
+    'import_accepted', 'import_rejected',
   ].includes(event.kind)
 
   // Override events render the full justification text underneath the

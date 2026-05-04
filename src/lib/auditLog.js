@@ -151,13 +151,22 @@ export function classifyEvent(event) {
     // synthetic event written directly to change_log by
     // capture_tuition_audit_snapshot — see Migration 039 header.
     if (event.reason.startsWith('snapshot_captured')) return 'snapshot_captured'
+    // v3.8.18 (Tuition-B2-import): synthetic events for bulk import
+    // accept and reject. accept_tuition_audit_import_batch and
+    // reject_tuition_audit_import_batch (Migration 041) write a
+    // change_log row pointed at the scenario so the activity feed
+    // surfaces them.
+    if (event.reason.startsWith('import_accepted')) return 'import_accepted'
+    if (event.reason.startsWith('import_rejected')) return 'import_rejected'
   }
 
   if (fieldByName.__insert__) return 'insert'
   if (fieldByName.__delete__) return 'delete'
-  // Field-name marker (set when the RPC writes the synthetic event
+  // Field-name markers (set when the RPC writes the synthetic event
   // without setting reason — defensive fallback).
   if (fieldByName.__snapshot_captured__) return 'snapshot_captured'
+  if (fieldByName.__import_accepted__)   return 'import_accepted'
+  if (fieldByName.__import_rejected__)   return 'import_rejected'
 
   const stateField = fieldByName.state
   if (stateField) {
@@ -509,6 +518,27 @@ export function summarizeEvent(event) {
       return label
         ? `Snapshot captured: "${label}"`
         : `Snapshot captured`
+    }
+    case 'import_accepted': {
+      // v3.8.18: synthetic event from accept_tuition_audit_import_batch.
+      // new_value carries { batch_id, file_name, mode, row_count }.
+      const f = event.fields.find((x) => x.field_name === '__import_accepted__')
+      const meta = (f && f.new_value && typeof f.new_value === 'object') ? f.new_value : {}
+      const rowCount = meta.row_count || 0
+      const mode = meta.mode || 'append'
+      const fileName = meta.file_name || null
+      const baseSummary = `Imported ${rowCount} ${rowCount === 1 ? 'family' : 'families'} (${mode} mode)`
+      return fileName ? `${baseSummary} from "${fileName}"` : baseSummary
+    }
+    case 'import_rejected': {
+      const f = event.fields.find((x) => x.field_name === '__import_rejected__')
+      const meta = (f && f.new_value && typeof f.new_value === 'object') ? f.new_value : {}
+      const fileName = meta.file_name || null
+      const reason = meta.reason || null
+      const filePart = fileName ? ` "${fileName}"` : ''
+      return reason
+        ? `Rejected import${filePart}. Reason: "${reason}"`
+        : `Rejected import${filePart}`
     }
     case 'amount': {
       const f = event.fields.find((x) => x.field_name === 'amount')

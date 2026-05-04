@@ -21,6 +21,7 @@ import TuitionFamilyDetailsTable from '../../components/tuition/TuitionFamilyDet
 import CaptureSnapshotModal from '../../components/tuition/CaptureSnapshotModal'
 import SnapshotsPanel from '../../components/tuition/SnapshotsPanel'
 import ActivityFeedModal from '../../components/budget/ActivityFeedModal'
+import TuitionImportUploadModal from '../../components/tuition/TuitionImportUploadModal'
 
 // Tuition Stage 2 (Tuition Audit) page — v3.8.16 (B2-final) redesign.
 //
@@ -138,6 +139,7 @@ function TuitionAuditPage() {
   const [snapshotsPanelOpen, setSnapshotsPanelOpen] = useState(false)
   const [activityModalOpen, setActivityModalOpen] = useState(false)
   const [snapshotsRefreshKey, setSnapshotsRefreshKey] = useState(0)
+  const [importModalOpen, setImportModalOpen] = useState(false)
 
   // ---- stage resolution ------------------------------------------------
 
@@ -424,7 +426,7 @@ function TuitionAuditPage() {
   }, [families, loadFamilies, toast])
 
   function handleImportCsvClick() {
-    toast.success('Bulk import via CSV is coming in the next session. For now, families are added one at a time via the + Add Family button.')
+    setImportModalOpen(true)
   }
 
   function handleSnapshotCaptured() {
@@ -656,6 +658,15 @@ function TuitionAuditPage() {
           scenarioId={activeScenario.id}
           accountsById={null}
           onClose={() => setActivityModalOpen(false)}
+        />
+      )}
+
+      {importModalOpen && activeScenario && (
+        <TuitionImportUploadModal
+          scenario={activeScenario}
+          ayeLabel={aye?.label}
+          onCancel={() => setImportModalOpen(false)}
+          onSuccess={() => setImportModalOpen(false)}
         />
       )}
     </AppShell>

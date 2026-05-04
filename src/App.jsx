@@ -10,6 +10,7 @@ import Financial from './pages/admin/settings/Financial'
 import ModuleConfiguration from './pages/admin/settings/ModuleConfiguration'
 import TuitionWorksheet from './pages/modules/TuitionWorksheet'
 import TuitionAuditPage from './pages/modules/TuitionAuditPage'
+import TuitionAuditImportStaging from './pages/modules/TuitionAuditImportStaging'
 import BudgetStage from './pages/modules/BudgetStage'
 import BudgetDetailPrint from './pages/print/BudgetDetailPrint'
 import BudgetActivityPrint from './pages/print/BudgetActivityPrint'
@@ -91,6 +92,14 @@ function App() {
           element={
             <ProtectedRoute>
               <TuitionAuditPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/modules/tuition/audit/import/:batchId"
+          element={
+            <ProtectedRoute>
+              <TuitionAuditImportStaging />
             </ProtectedRoute>
           }
         />
