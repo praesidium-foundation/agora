@@ -540,13 +540,15 @@ export function computeFamilyAppliedTierRate(family, scenario) {
   return naturalPerStudentRate(family, scenario)
 }
 
-// Multi-Student Discount for a family. Faculty families: 0 (the
-// rule does not apply). Non-faculty families: (base_rate -
-// applied_tier_rate) × students_enrolled.
+// Auto-computed Multi-Student Discount — what the value WOULD be
+// based on stored applied_tier_rate, students_enrolled, and
+// is_faculty_family. Does NOT consult the
+// multi_student_discount_amount column. Used by the override-detection
+// helper and exposed for the gold-dot tooltip ("auto value: $X").
 //
-// Returns null if applied_tier_rate or students_enrolled are
-// insufficient.
-export function computeFamilyMultiStudentDiscount(family, scenario) {
+// Faculty families: 0 (the rule precludes; non-overridable).
+// Non-faculty: (base_rate − applied_tier_rate) × students_enrolled.
+export function getFamilyMultiStudentAutoValue(family, scenario) {
   if (family?.is_faculty_family) return 0
   const students = Number(family?.students_enrolled) || 0
   if (students <= 0) return null
@@ -554,6 +556,45 @@ export function computeFamilyMultiStudentDiscount(family, scenario) {
   if (applied == null) return null
   const baseRate = getTierRateForSize(scenario, 1)
   return (baseRate - applied) * students
+}
+
+// Effective Multi-Student Discount for a family — what the cell
+// renders and what flows into Subtotal / NET-for-YEAR math.
+//
+// v3.8.21: returns the stored override (multi_student_discount_amount)
+// if non-null AND the family is non-faculty; otherwise returns the
+// auto-computed value. Faculty families always return 0 regardless
+// of any stored override (defensive — the column should be NULL on
+// faculty rows per the cascade in TuitionFamilyDetailsTable's
+// handleToggleFaculty, but defensive null handling here ensures the
+// faculty rule is never violated by stale data).
+//
+// Returns null if applied_tier_rate or students_enrolled are
+// insufficient (no headcount → no discount to compute).
+export function computeFamilyMultiStudentDiscount(family, scenario) {
+  // Faculty rule: discount does not apply, regardless of any stored override.
+  if (family?.is_faculty_family) return 0
+  // v3.8.21 override path.
+  if (family?.multi_student_discount_amount != null) {
+    return Number(family.multi_student_discount_amount)
+  }
+  return getFamilyMultiStudentAutoValue(family, scenario)
+}
+
+// Override detection — drives the gold-dot indicator on the
+// Multi-Student Discount cell. Returns true when the stored override
+// is non-null AND differs from the auto value.
+//
+// Faculty families: always false (the column is non-editable; stored
+// override should be NULL but defensive against stale data).
+// Returns false when no override is stored OR when the auto value
+// can't be computed (insufficient inputs — em-dash territory).
+export function isFamilyMultiStudentOverridden(family, scenario) {
+  if (family?.is_faculty_family) return false
+  if (family?.multi_student_discount_amount == null) return false
+  const auto = getFamilyMultiStudentAutoValue(family, scenario)
+  if (auto == null) return false
+  return Number(family.multi_student_discount_amount) !== Number(auto)
 }
 
 // Auto-computed faculty discount amount — what the value WOULD be
@@ -574,16 +615,27 @@ export function computeFamilyFacultyDiscountAuto(family, scenario) {
 }
 
 // NET Tuition for the YEAR — the bottom-right number for each family.
-// Subtotal − faculty − other − financial aid, treating null
-// discount fields as zero (they have not been allocated).
 //
-// Returns null if the subtotal cannot be computed.
+// v3.8.21 update: subtotal is now computed as
+//   base_rate × students_enrolled − effective_multi_student_discount
+// where effective_multi_student_discount is the override (if stored)
+// or the auto value (otherwise). When NOT overridden, this math is
+// equivalent to applied_tier_rate × students (the prior formulation):
+//   base × students − (base − applied) × students = applied × students
+// When overridden, the override flows through to Subtotal and NET.
+// The Net Tuition Rate column display stays at applied_tier_rate
+// (canonical) per the Q-cascade-1 design decision; the override
+// signal lives on Multi-Student / Subtotal / NET.
+//
+// Returns null if students_enrolled or base rate are insufficient.
 export function computeFamilyNetTuition(family, scenario) {
   const students = Number(family?.students_enrolled) || 0
   if (students <= 0) return null
-  const applied = computeFamilyAppliedTierRate(family, scenario)
-  if (applied == null) return null
-  const subtotal = applied * students
+  const baseRate = getTierRateForSize(scenario, 1)
+  if (baseRate <= 0) return null
+  const multiStudent = computeFamilyMultiStudentDiscount(family, scenario)
+  if (multiStudent == null) return null
+  const subtotal = (baseRate * students) - multiStudent
   const faculty = Number(family?.faculty_discount_amount) || 0
   const other = Number(family?.other_discount_amount) || 0
   const fa = Number(family?.financial_aid_amount) || 0

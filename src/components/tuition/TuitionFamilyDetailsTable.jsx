@@ -4,7 +4,9 @@ import {
   computeFamilyFacultyDiscountAuto,
   computeFamilyMultiStudentDiscount,
   computeFamilyNetTuition,
+  getFamilyMultiStudentAutoValue,
   isFamilyFacultyDiscountOverridden,
+  isFamilyMultiStudentOverridden,
   isFamilyTierRateOverridden,
   naturalAppliedTierRate,
   naturalAppliedTierSize,
@@ -68,17 +70,22 @@ import TuitionFamilyHistoryModal from './TuitionFamilyHistoryModal'
 // Clock icons for per-row history hide. Gold dots remain visible.
 //
 // Props:
-//   families     — array of tuition_worksheet_family_details rows in
-//                  display order (parent applies the sort)
-//   scenario     — active Stage 2 scenario row
-//   readOnly     — bool; when true, no input chrome anywhere
-//   onUpdateRow  — (familyId, patchObj) => Promise<boolean>
-//   onDeleteRow  — (familyId) => Promise<void>
+//   families        — array of tuition_worksheet_family_details rows
+//                     in display order (parent applies the sort)
+//   scenario        — active Stage 2 scenario row
+//   readOnly        — bool; when true, no input chrome anywhere
+//   headerCollapsed — bool (v3.8.21); when true, the page's reference
+//                     header zone is collapsed and the table can use
+//                     more vertical space. Drives the viewport-
+//                     responsive max-height computation.
+//   onUpdateRow     — (familyId, patchObj) => Promise<boolean>
+//   onDeleteRow     — (familyId) => Promise<void>
 
 export default function TuitionFamilyDetailsTable({
   families,
   scenario,
   readOnly,
+  headerCollapsed = false,
   onUpdateRow,
   onDeleteRow,
 }) {
@@ -97,6 +104,10 @@ export default function TuitionFamilyDetailsTable({
         { ...family, is_faculty_family: true },
         scenario,
       )
+      // v3.8.21: clear any prior Multi-Student override when
+      // toggling to faculty — faculty rule precludes the discount;
+      // the column will render $0 and the cell becomes non-editable.
+      patch.multi_student_discount_amount = null
     } else {
       patch.applied_tier_size = naturalAppliedTierSize(
         { ...family, is_faculty_family: false },
@@ -107,6 +118,12 @@ export default function TuitionFamilyDetailsTable({
         scenario,
       )
       patch.faculty_discount_amount = null
+      // v3.8.21: also clear any Multi-Student override on transition
+      // back to non-faculty — auto-compute should drive the value
+      // until the operator explicitly overrides again. (A stale
+      // override from a prior faculty toggle wouldn't make sense
+      // applied to the new tier-derived auto value.)
+      patch.multi_student_discount_amount = null
     }
     await onUpdateRow(family.id, patch)
   }
@@ -135,9 +152,26 @@ export default function TuitionFamilyDetailsTable({
     await onUpdateRow(familyId, { [field]: value })
   }
 
+  // v3.8.21 — viewport-responsive max-height. Reservation values
+  // approximate the vertical chrome above the table:
+  //   header collapsed: page header (~80px) + action bar (~50px) +
+  //                     wrapper padding (~30px) ≈ 200px reservation
+  //   header expanded:  the above + 3-card grid (~180px) ≈ 380px
+  //                     reservation
+  // Lower bound `min-h-[300px]` prevents the table from collapsing
+  // below ~5 rows on small viewports (the inner scroll engages
+  // earlier in that case).
+  //
+  // Both class strings are full literals so Tailwind's JIT picks
+  // them up at build time (a templated `max-h-[calc(100vh-${X})]`
+  // would not be statically analyzable).
+  const tableHeightClass = headerCollapsed
+    ? 'max-h-[calc(100vh-13rem)]'
+    : 'max-h-[calc(100vh-24rem)]'
+
   return (
     <div className="w-full">
-      <div className="overflow-x-auto overflow-y-auto bg-white border-[0.5px] border-card-border rounded-[6px] max-h-[calc(100vh-22rem)] tuition-audit-table-wrapper">
+      <div className={`overflow-x-auto overflow-y-auto bg-white border-[0.5px] border-card-border rounded-[6px] min-h-[300px] ${tableHeightClass} tuition-audit-table-wrapper`}>
         <table className="w-full text-[12px] font-body border-collapse">
           <thead className="sticky top-0 z-10 bg-cream-highlight/80 backdrop-blur">
             <tr className="border-b-[0.5px] border-card-border">
@@ -220,11 +254,20 @@ function FamilyRow({
   const baseTuition = baseRate > 0 && students > 0 ? baseRate * students : null
   const multiStudent = computeFamilyMultiStudentDiscount(family, scenario)
   const netRate = computeFamilyAppliedTierRate(family, scenario)
-  const subtotal = netRate != null && students > 0 ? netRate * students : null
+  // v3.8.21: subtotal = base × students − effective multi-student
+  // discount (override flows through). For non-overridden case, this
+  // equals applied_tier_rate × students (the prior formulation), so
+  // unchanged display for the common case.
+  const subtotal = baseTuition != null && multiStudent != null
+    ? baseTuition - multiStudent
+    : null
   const netForYear = computeFamilyNetTuition(family, scenario)
   const facultyAuto = computeFamilyFacultyDiscountAuto(family, scenario)
   const facultyOverridden = isFamilyFacultyDiscountOverridden(family, scenario)
   const tierOverridden = isFamilyTierRateOverridden(family, scenario)
+  // v3.8.21: Multi-Student override-detection helpers.
+  const multiStudentAuto = getFamilyMultiStudentAutoValue(family, scenario)
+  const multiStudentOverridden = isFamilyMultiStudentOverridden(family, scenario)
 
   const rowBg = zebra ? 'bg-cream-highlight/15' : 'bg-white'
 
@@ -280,9 +323,33 @@ function FamilyRow({
         <ComputedCell value={baseTuition} />
       </Td>
 
-      {/* Multiple Student Discount — $0 explicitly for faculty */}
+      {/* Multiple Student Discount — editable for non-faculty rows
+          per v3.8.21 (Override-capable projection pattern). Faculty
+          rows render $0 read-only (faculty rule precludes the
+          discount). The displayed value is the EFFECTIVE multi-
+          student (auto when not overridden; stored when overridden);
+          on save the entered value writes to multi_student_discount_
+          amount. Empty input writes NULL, reverting the cell to
+          auto-fallback. Gold dot inline-adjacent when stored value
+          diverges from auto. */}
       <Td className="text-right">
-        <ComputedCell value={multiStudent} subtractive />
+        {family.is_faculty_family ? (
+          <ComputedCell value={multiStudent} subtractive />
+        ) : (
+          <span className="inline-flex items-center justify-end w-full">
+            {multiStudentOverridden && (
+              <OverrideDot autoValue={multiStudentAuto} />
+            )}
+            <CurrencyCell
+              value={multiStudent}
+              readOnly={readOnly}
+              subtractive
+              onSave={(v) =>
+                onFieldSave(family.id, 'multi_student_discount_amount', v)
+              }
+            />
+          </span>
+        )}
       </Td>
 
       {/* Net Tuition Rate — gold dot inline if overridden */}

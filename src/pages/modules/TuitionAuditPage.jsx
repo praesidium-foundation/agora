@@ -622,11 +622,15 @@ function TuitionAuditPage() {
                 </p>
               </div>
 
-              {/* Family table */}
+              {/* Family table — receives headerCollapsed for the
+                  v3.8.21 viewport-responsive max-height computation
+                  (more vertical space available when the reference
+                  card grid is collapsed). */}
               <TuitionFamilyDetailsTable
                 families={orderedFamilies}
                 scenario={activeScenario}
                 readOnly={readOnly}
+                headerCollapsed={headerCollapsed}
                 onUpdateRow={handleUpdateRow}
                 onDeleteRow={handleDeleteRow}
               />
