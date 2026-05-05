@@ -30,7 +30,8 @@ import TuitionFamilyHistoryModal from './TuitionFamilyHistoryModal'
 //   4. # Enr.                     (integer input, no spinner)
 //                                 ─── Identity group divider ───
 //   5. Base Tuition               (computed)
-//   6. Multiple Student Disc.     (computed; $0 for faculty)
+//   6. Multiple Student Disc.     (editable; default $0 for faculty;
+//                                  gold-dot if overridden — v3.8.22)
 //   7. Net Tuition Rate           (computed; gold-dot if overridden)
 //   8. Subtotal for Year          (computed)
 //                                 ─── Computed group divider ───
@@ -104,9 +105,13 @@ export default function TuitionFamilyDetailsTable({
         { ...family, is_faculty_family: true },
         scenario,
       )
-      // v3.8.21: clear any prior Multi-Student override when
-      // toggling to faculty — faculty rule precludes the discount;
-      // the column will render $0 and the cell becomes non-editable.
+      // Clear any prior Multi-Student override on toggle. v3.8.22
+      // permits override on faculty rows (Cookson-class cases) but
+      // the auto-value context changes dramatically on toggle —
+      // from `(base − applied) × students` to `0` — so a stale
+      // override anchored to the prior context no longer reflects
+      // operator intent. Operator can re-enter intentionally if the
+      // override is meaningful in the new context.
       patch.multi_student_discount_amount = null
     } else {
       patch.applied_tier_size = naturalAppliedTierSize(
@@ -118,11 +123,9 @@ export default function TuitionFamilyDetailsTable({
         scenario,
       )
       patch.faculty_discount_amount = null
-      // v3.8.21: also clear any Multi-Student override on transition
-      // back to non-faculty — auto-compute should drive the value
-      // until the operator explicitly overrides again. (A stale
-      // override from a prior faculty toggle wouldn't make sense
-      // applied to the new tier-derived auto value.)
+      // Same clearing rationale as the forward toggle — auto value
+      // changes from 0 to tier-derived; stale override no longer
+      // reflects operator intent.
       patch.multi_student_discount_amount = null
     }
     await onUpdateRow(family.id, patch)
@@ -323,33 +326,32 @@ function FamilyRow({
         <ComputedCell value={baseTuition} />
       </Td>
 
-      {/* Multiple Student Discount — editable for non-faculty rows
-          per v3.8.21 (Override-capable projection pattern). Faculty
-          rows render $0 read-only (faculty rule precludes the
-          discount). The displayed value is the EFFECTIVE multi-
-          student (auto when not overridden; stored when overridden);
-          on save the entered value writes to multi_student_discount_
-          amount. Empty input writes NULL, reverting the cell to
-          auto-fallback. Gold dot inline-adjacent when stored value
-          diverges from auto. */}
+      {/* Multiple Student Discount — editable on ALL rows (faculty +
+          non-faculty) per v3.8.22. The faculty rule remains as a
+          DEFAULT (auto value = $0 for faculty rows) but operators
+          can override that default for Cookson-class one-off cases
+          where a faculty family retained a multi-student tier
+          discount via a pre-signed Tuition Agreement. The displayed
+          value is the EFFECTIVE multi-student (stored when
+          overridden; auto otherwise); on save the entered value
+          writes to multi_student_discount_amount. Empty input writes
+          NULL, reverting the cell to auto-fallback. Gold dot inline-
+          adjacent when stored diverges from auto (faculty rows: any
+          non-zero stored value triggers the dot since auto = 0). */}
       <Td className="text-right">
-        {family.is_faculty_family ? (
-          <ComputedCell value={multiStudent} subtractive />
-        ) : (
-          <span className="inline-flex items-center justify-end w-full">
-            {multiStudentOverridden && (
-              <OverrideDot autoValue={multiStudentAuto} />
-            )}
-            <CurrencyCell
-              value={multiStudent}
-              readOnly={readOnly}
-              subtractive
-              onSave={(v) =>
-                onFieldSave(family.id, 'multi_student_discount_amount', v)
-              }
-            />
-          </span>
-        )}
+        <span className="inline-flex items-center justify-end w-full">
+          {multiStudentOverridden && (
+            <OverrideDot autoValue={multiStudentAuto} />
+          )}
+          <CurrencyCell
+            value={multiStudent}
+            readOnly={readOnly}
+            subtractive
+            onSave={(v) =>
+              onFieldSave(family.id, 'multi_student_discount_amount', v)
+            }
+          />
+        </span>
       </Td>
 
       {/* Net Tuition Rate — gold dot inline if overridden */}

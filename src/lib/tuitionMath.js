@@ -546,7 +546,12 @@ export function computeFamilyAppliedTierRate(family, scenario) {
 // multi_student_discount_amount column. Used by the override-detection
 // helper and exposed for the gold-dot tooltip ("auto value: $X").
 //
-// Faculty families: 0 (the rule precludes; non-overridable).
+// Faculty families: 0 (the rule's default — faculty discount replaces
+// the multi-student tier discount; multi-student auto value is zero).
+// As of v3.8.22 this is the DEFAULT, not a hard block — operators
+// can override it for one-off Cookson-class cases (faculty hire with
+// a pre-signed Tuition Agreement that honored the multi-student tier
+// discount).
 // Non-faculty: (base_rate − applied_tier_rate) × students_enrolled.
 export function getFamilyMultiStudentAutoValue(family, scenario) {
   if (family?.is_faculty_family) return 0
@@ -561,20 +566,28 @@ export function getFamilyMultiStudentAutoValue(family, scenario) {
 // Effective Multi-Student Discount for a family — what the cell
 // renders and what flows into Subtotal / NET-for-YEAR math.
 //
-// v3.8.21: returns the stored override (multi_student_discount_amount)
-// if non-null AND the family is non-faculty; otherwise returns the
-// auto-computed value. Faculty families always return 0 regardless
-// of any stored override (defensive — the column should be NULL on
-// faculty rows per the cascade in TuitionFamilyDetailsTable's
-// handleToggleFaculty, but defensive null handling here ensures the
-// faculty rule is never violated by stale data).
+// v3.8.22 update: stored override (multi_student_discount_amount)
+// takes precedence regardless of is_faculty_family. The faculty rule
+// is now a DEFAULT (auto value = 0) rather than a hard block on
+// override capability. Real-data discovery: faculty families with
+// pre-signed Tuition Agreements may have legitimately retained a
+// multi-student tier discount (Cookson-class one-off cases), and
+// operators must be able to record that fact directly on the row
+// rather than working around it via Faculty Discount composition.
+//
+// Resolution order:
+//   1. Stored override (multi_student_discount_amount) — if non-null,
+//      return it as-is. Applies to faculty AND non-faculty rows.
+//   2. Auto-computed value via getFamilyMultiStudentAutoValue:
+//      - Faculty: 0 (rule default)
+//      - Non-faculty: (base − applied) × students
 //
 // Returns null if applied_tier_rate or students_enrolled are
-// insufficient (no headcount → no discount to compute).
+// insufficient on the auto path (no headcount → no discount to
+// compute).
 export function computeFamilyMultiStudentDiscount(family, scenario) {
-  // Faculty rule: discount does not apply, regardless of any stored override.
-  if (family?.is_faculty_family) return 0
-  // v3.8.21 override path.
+  // v3.8.22: override path takes precedence on ALL rows (faculty +
+  // non-faculty). Faculty rule applies only on the auto fallback.
   if (family?.multi_student_discount_amount != null) {
     return Number(family.multi_student_discount_amount)
   }
@@ -585,12 +598,14 @@ export function computeFamilyMultiStudentDiscount(family, scenario) {
 // Multi-Student Discount cell. Returns true when the stored override
 // is non-null AND differs from the auto value.
 //
-// Faculty families: always false (the column is non-editable; stored
-// override should be NULL but defensive against stale data).
+// v3.8.22: applies uniformly to faculty AND non-faculty rows. For
+// faculty rows the auto value is 0, so any non-zero stored override
+// fires the indicator. (A stored 0 on a faculty row matches the rule
+// default and is correctly reported as not-overridden.)
+//
 // Returns false when no override is stored OR when the auto value
 // can't be computed (insufficient inputs — em-dash territory).
 export function isFamilyMultiStudentOverridden(family, scenario) {
-  if (family?.is_faculty_family) return false
   if (family?.multi_student_discount_amount == null) return false
   const auto = getFamilyMultiStudentAutoValue(family, scenario)
   if (auto == null) return false
@@ -715,8 +730,11 @@ export function naturalAppliedTierRate(family, scenario) {
 // ============================================================================
 
 // Sum of per-family multi-student discount across all families.
-// Faculty families contribute 0 per the faculty-discount-replaces-
-// multi-student-tier-discount rule (Appendix C v3.8.14).
+// Faculty families default to 0 per the faculty-discount-replaces-
+// multi-student-tier-discount rule (Appendix C v3.8.14), but as of
+// v3.8.22 a faculty row may carry an explicit multi_student_discount_
+// amount override (Cookson-class one-off cases) — the override flows
+// through computeFamilyMultiStudentDiscount and is summed here.
 export function sumMultiStudentDiscountUsed(families, scenario) {
   if (!Array.isArray(families)) return 0
   let total = 0
