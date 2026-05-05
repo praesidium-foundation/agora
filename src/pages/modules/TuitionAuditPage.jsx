@@ -647,6 +647,7 @@ function TuitionAuditPage() {
       {snapshotsPanelOpen && activeScenario && (
         <SnapshotsPanel
           scenarioId={activeScenario.id}
+          ayeLabel={aye?.label}
           refreshKey={snapshotsRefreshKey}
           onClose={() => setSnapshotsPanelOpen(false)}
         />

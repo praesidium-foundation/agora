@@ -1,22 +1,28 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { useToast } from '../../lib/Toast'
+import { useModulePermission } from '../../lib/usePermission'
 
 // Snapshots side panel for the Tuition Audit page.
 //
 // v3.8.16 (Tuition-B2-final). Slide-out right-side panel listing
 // every snapshot for the active Stage 2 scenario, chronological
-// (newest first). Each row shows the snapshot reason, the operator-
-// provided label (or a synthesized one for legacy lock snapshots),
-// captured_at timestamp, and the captured-by name.
+// (newest first).
+//
+// v3.8.20 (Tuition-CrossModule-KPIs): per-row "Mark as Final Budget
+// reference" affordance. The promoted snapshot anchors Final
+// Budget's enrollment-dependent KPIs (Cost per Student, Tuition
+// Gap, Break-even Enrollment); see §7.3 cross-module data flow.
+// Only one snapshot per scenario can be the reference at a time;
+// promotion is atomic (demote prior + promote new in one
+// transaction).
 //
 // Per-row "View" affordance is a stub for B2-final — the read-only
-// snapshot view (full Tuition Audit page rendered against the
-// snapshot data) ships in a future Tuition-E session. For now the
-// button shows a toast directing users to the eventual feature.
+// snapshot view ships in a future Tuition-E session.
 //
 // Props:
 //   scenarioId  — uuid of the active Stage 2 scenario
+//   ayeLabel    — optional; displayed in the promote-confirmation copy
 //   onClose     — () => void
 //   refreshKey  — incrementing number that triggers re-fetch (used by
 //                  the parent to reload after a new snapshot is
@@ -31,17 +37,24 @@ const REASON_LABELS = {
   other:                 'Other',
 }
 
-export default function SnapshotsPanel({ scenarioId, onClose, refreshKey = 0 }) {
+export default function SnapshotsPanel({ scenarioId, ayeLabel, onClose, refreshKey = 0 }) {
   const toast = useToast()
+  const { allowed: canEdit } = useModulePermission('tuition', 'edit')
   const [snapshots, setSnapshots] = useState(null)
   const [error, setError] = useState(null)
   const [capturerNames, setCapturerNames] = useState({})
+  const [internalRefreshKey, setInternalRefreshKey] = useState(0)
+
+  // Promotion confirmation modal state.
+  // {snapshotId, snapshotLabel, currentRefId, currentRefLabel} | null
+  const [promoteConfirm, setPromoteConfirm] = useState(null)
+  const [promoting, setPromoting] = useState(false)
 
   useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onClose() }
+    function onKey(e) { if (e.key === 'Escape' && !promoting) onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, promoting])
 
   // Load snapshots for this scenario.
   useEffect(() => {
@@ -52,7 +65,7 @@ export default function SnapshotsPanel({ scenarioId, onClose, refreshKey = 0 }) 
     ;(async () => {
       const { data, error: queryError } = await supabase
         .from('tuition_worksheet_snapshots')
-        .select('id, snapshot_reason, snapshot_label, captured_at, locked_by, locked_by_name_at_lock, locked_via, scenario_label_at_lock')
+        .select('id, snapshot_reason, snapshot_label, captured_at, locked_at, locked_by, locked_by_name_at_lock, locked_via, scenario_label_at_lock, stage_type_at_lock, is_final_budget_reference')
         .eq('scenario_id', scenarioId)
         .order('captured_at', { ascending: false })
       if (!mounted) return
@@ -62,10 +75,6 @@ export default function SnapshotsPanel({ scenarioId, onClose, refreshKey = 0 }) 
       }
       setSnapshots(data || [])
 
-      // Resolve capturer names. The captured-by-value
-      // locked_by_name_at_lock column is the durable identity field
-      // (the user row may be deleted later), so we use it directly
-      // rather than re-resolving via user_profiles.
       const names = {}
       for (const snap of data || []) {
         if (snap.locked_by_name_at_lock) names[snap.id] = snap.locked_by_name_at_lock
@@ -73,19 +82,46 @@ export default function SnapshotsPanel({ scenarioId, onClose, refreshKey = 0 }) 
       setCapturerNames(names)
     })()
     return () => { mounted = false }
-  }, [scenarioId, refreshKey])
+  }, [scenarioId, refreshKey, internalRefreshKey])
 
   function handleViewSnapshot(snapshotId) {
-    // The read-only snapshot view ships in Tuition-E. For now, surface
-    // a toast directing users to the eventual feature.
     void snapshotId
     toast.success('Read-only snapshot view ships in a future Tuition-E session. The snapshot data is preserved in the database.')
+  }
+
+  function handlePromoteClick(snap) {
+    if (!canEdit) return
+    const currentRef = (snapshots || []).find((s) => s.is_final_budget_reference)
+    setPromoteConfirm({
+      snapshotId:     snap.id,
+      snapshotLabel:  snap.snapshot_label || synthesizeLabel(snap),
+      currentRefId:   currentRef?.id || null,
+      currentRefLabel: currentRef?.snapshot_label || (currentRef ? synthesizeLabel(currentRef) : null),
+    })
+  }
+
+  async function performPromote() {
+    if (!promoteConfirm) return
+    setPromoting(true)
+    try {
+      const { error: rpcError } = await supabase.rpc('mark_snapshot_as_final_budget_reference', {
+        p_snapshot_id: promoteConfirm.snapshotId,
+      })
+      if (rpcError) throw rpcError
+      toast.success(`Snapshot marked as Final Budget reference: ${promoteConfirm.snapshotLabel}`)
+      setPromoteConfirm(null)
+      setInternalRefreshKey((k) => k + 1)
+    } catch (e) {
+      toast.error(e.message || String(e))
+    } finally {
+      setPromoting(false)
+    }
   }
 
   return (
     <div
       className="fixed inset-0 z-40 flex justify-end bg-navy/30"
-      onClick={onClose}
+      onClick={() => !promoting && onClose()}
       role="presentation"
     >
       <aside
@@ -142,7 +178,9 @@ export default function SnapshotsPanel({ scenarioId, onClose, refreshKey = 0 }) 
                   key={snap.id}
                   snapshot={snap}
                   capturerName={capturerNames[snap.id] || snap.locked_by_name_at_lock}
+                  canEdit={canEdit}
                   onView={() => handleViewSnapshot(snap.id)}
+                  onPromote={() => handlePromoteClick(snap)}
                 />
               ))}
             </ul>
@@ -159,20 +197,24 @@ export default function SnapshotsPanel({ scenarioId, onClose, refreshKey = 0 }) 
           </button>
         </footer>
       </aside>
+
+      {promoteConfirm && (
+        <PromoteConfirmModal
+          confirm={promoteConfirm}
+          ayeLabel={ayeLabel}
+          submitting={promoting}
+          onCancel={() => !promoting && setPromoteConfirm(null)}
+          onConfirm={performPromote}
+        />
+      )}
     </div>
   )
 }
 
-function SnapshotRow({ snapshot, capturerName, onView }) {
-  // Synthesize a reason label. snapshot_reason may be NULL on
-  // pre-Migration-038 lock snapshots; infer 'lock' from locked_via
-  // when reason is missing.
+function SnapshotRow({ snapshot, capturerName, canEdit, onView, onPromote }) {
   const reason = snapshot.snapshot_reason
     || (snapshot.locked_via === 'snapshot' ? 'midyear_reference' : 'lock')
   const reasonLabel = REASON_LABELS[reason] || reason
-
-  // Display label: operator-provided; fall back to reason label for
-  // lock snapshots that have no label.
   const displayLabel = snapshot.snapshot_label || reasonLabel
 
   const capturedAtStr = snapshot.captured_at
@@ -182,26 +224,41 @@ function SnapshotRow({ snapshot, capturerName, onView }) {
       })
     : '—'
 
-  // Visual treatment by reason. Lock snapshots get a navy left rule
+  // Visual treatment by reason. Lock snapshots get a navy/blue rule
   // (governance milestone); operator snapshots get a muted gold rule
   // (working reference).
   const ruleClass = reason === 'lock'
     ? 'border-status-blue'
     : 'border-gold/60'
 
+  // Final Budget reference promotion is only meaningful for Stage 2
+  // (audit) snapshots — Stage 1 lock snapshots aren't eligible.
+  const isAuditSnapshot = snapshot.stage_type_at_lock === 'final'
+  const isReference = !!snapshot.is_final_budget_reference
+
   return (
     <li className={`pl-3 py-2 border-l-2 ${ruleClass} bg-white border-[0.5px] border-card-border rounded-r`}>
-      <div className="flex items-baseline justify-between gap-3">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
         <span className="font-display text-navy text-[14px] tracking-[0.04em]">
           {displayLabel}
         </span>
-        <button
-          type="button"
-          onClick={onView}
-          className="font-body text-status-blue hover:underline text-[12px] flex-shrink-0"
-        >
-          View
-        </button>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          {isReference && (
+            <span
+              className="inline-block px-1.5 py-0.5 text-[9px] uppercase tracking-[0.08em] text-gold border-[0.5px] border-gold/40 rounded"
+              title="This snapshot is the Final Budget reference for the AYE"
+            >
+              Final Budget reference
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onView}
+            className="font-body text-status-blue hover:underline text-[12px]"
+          >
+            View
+          </button>
+        </div>
       </div>
       <p className="font-body text-muted text-[11px] uppercase tracking-wider mt-0.5">
         {reasonLabel}
@@ -210,6 +267,89 @@ function SnapshotRow({ snapshot, capturerName, onView }) {
         Captured <strong className="font-medium">{capturedAtStr}</strong>
         {capturerName ? <> · by <strong className="font-medium">{capturerName}</strong></> : null}
       </p>
+      {isAuditSnapshot && !isReference && canEdit && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={onPromote}
+            className="font-body text-[12px] text-navy hover:underline underline-offset-2"
+            title="Promote this snapshot as the Final Budget reference for the AYE"
+          >
+            Mark as Final Budget reference
+          </button>
+        </div>
+      )}
     </li>
   )
+}
+
+function PromoteConfirmModal({ confirm, ayeLabel, submitting, onCancel, onConfirm }) {
+  const ayeText = ayeLabel ? `for ${ayeLabel}` : 'for this AYE'
+  const replacingPrior = !!confirm.currentRefId && confirm.currentRefId !== confirm.snapshotId
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-navy/40"
+      onClick={onCancel}
+      role="presentation"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-cream border-[0.5px] border-card-border rounded-[10px] max-w-md w-full p-6 shadow-lg"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="promote-confirm-title"
+      >
+        <h3
+          id="promote-confirm-title"
+          className="font-display text-navy text-[18px] mb-2 leading-tight"
+        >
+          Mark as Final Budget reference?
+        </h3>
+        {replacingPrior ? (
+          <p className="text-body text-sm leading-relaxed mb-4">
+            This will replace the current Final Budget reference{' '}
+            (currently:{' '}
+            <strong className="font-medium">{confirm.currentRefLabel || '(unlabeled)'}</strong>)
+            with{' '}
+            <strong className="font-medium">{confirm.snapshotLabel}</strong>.
+            The Final Budget {ayeText} will start reading from this
+            snapshot's data instead. Confirm?
+          </p>
+        ) : (
+          <p className="text-body text-sm leading-relaxed mb-4">
+            Mark{' '}
+            <strong className="font-medium">{confirm.snapshotLabel}</strong>{' '}
+            as the Final Budget reference {ayeText}? Final Budget KPIs
+            will read from this snapshot's data.
+          </p>
+        )}
+        <div className="flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={submitting}
+            className="font-body text-muted hover:text-navy text-sm disabled:opacity-30"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={submitting}
+            className="bg-navy text-gold border-[0.5px] border-navy px-4 py-2 rounded text-sm font-body hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Promoting…' : (replacingPrior ? 'Replace and Promote' : 'Promote')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function synthesizeLabel(snap) {
+  if (snap.snapshot_label) return snap.snapshot_label
+  const reason = snap.snapshot_reason
+    || (snap.locked_via === 'snapshot' ? 'midyear_reference' : 'lock')
+  return REASON_LABELS[reason] || reason
 }

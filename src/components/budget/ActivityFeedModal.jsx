@@ -61,7 +61,11 @@ function passesFilter(event, filter) {
       // v3.8.18: tuition bulk import accept/reject — operator-driven
       // events with material data consequences (accept commits rows;
       // reject is a recorded decline). Belong in governance bucket.
-      'import_accepted', 'import_rejected'].includes(event.kind)
+      'import_accepted', 'import_rejected',
+      // v3.8.20: snapshot promoted as Final Budget reference —
+      // cross-module data-flow milestone (Final Budget KPIs start
+      // reading from this snapshot's data).
+      'snapshot_promoted'].includes(event.kind)
   }
   if (filter === 'edits') {
     return ['amount', 'edit', 'insert', 'delete'].includes(event.kind)
@@ -292,6 +296,12 @@ function FeedRow({ event }) {
     // (declined-without-effect, similar to unlock_withdrawn).
     import_accepted:         'border-status-green bg-status-green-bg/20',
     import_rejected:         'border-card-border bg-cream-highlight/40',
+    // v3.8.20 (Tuition-CrossModule-KPIs): snapshot promoted as
+    // Final Budget reference. Gold rule matches the snapshot
+    // capture treatment — both are operator-driven reference-point
+    // events; promotion is just selecting an existing snapshot to
+    // anchor cross-module KPIs.
+    snapshot_promoted:       'border-gold bg-cream-highlight/30',
   }
   const cls = treatments[event.kind] || 'border-card-border'
   const isGov = [
@@ -300,6 +310,7 @@ function FeedRow({ event }) {
     'unlock_rejected', 'unlock_withdrawn',
     'snapshot_captured',
     'import_accepted', 'import_rejected',
+    'snapshot_promoted',
   ].includes(event.kind)
 
   // Override events render the full justification text underneath the

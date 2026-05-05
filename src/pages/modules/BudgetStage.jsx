@@ -370,6 +370,18 @@ function BudgetStage() {
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotLines, setSnapshotLines] = useState([])
 
+  // v3.8.20 (Tuition-CrossModule-KPIs): cross-module Tuition refs.
+  // Populated on AYE / stage change; passed through to the
+  // KpiSidebar to drive Number of Students / Cost per Student /
+  // Tuition Gap / Break-even / Current Tuition KPIs.
+  //   tuitionStage1 — locked Stage 1 Planning snapshot for the AYE
+  //                   (read by both Preliminary and Final Budget)
+  //   tuitionAuditRef — operator-promoted Audit reference snapshot
+  //                     for the AYE (read by Final Budget only;
+  //                     null for Preliminary)
+  const [tuitionStage1, setTuitionStage1] = useState(null)
+  const [tuitionAuditRef, setTuitionAuditRef] = useState(null)
+
   const [dataLoading, setDataLoading] = useState(false)
 
   const [creating, setCreating] = useState(false)
@@ -638,6 +650,60 @@ function BudgetStage() {
     return () => { mounted = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAyeId, canView, stageId])
+
+  // v3.8.20: load Tuition cross-module refs for the active AYE.
+  //   Stage 1 lock snapshot (read by both Preliminary + Final Budget
+  //   for base rate / total_students / breakeven)
+  //   Final Budget Audit reference snapshot (read by Final Budget
+  //   only for actual enrollment / NET tuition for year)
+  // Both fail gracefully when the upstream data isn't ready yet
+  // (no Stage 1 lock; no promoted Audit reference); the KpiSidebar
+  // shows "Pending …" subtitles in those cases.
+  useEffect(() => {
+    if (!selectedAyeId) {
+      setTuitionStage1(null)
+      setTuitionAuditRef(null)
+      return
+    }
+    let mounted = true
+    ;(async () => {
+      // Stage 1 reference. Permission-aware: the RPC raises if the
+      // caller lacks tuition.view, in which case we silently leave
+      // the value null (the sidebar shows "Pending Tuition Planning
+      // lock" — the same UX the user with no Tuition view would see
+      // anyway).
+      try {
+        const { data, error } = await supabase.rpc('get_latest_locked_tuition_planning', {
+          p_aye_id: selectedAyeId,
+        })
+        if (!mounted) return
+        if (error) {
+          setTuitionStage1(null)
+        } else {
+          setTuitionStage1(Array.isArray(data) && data.length > 0 ? data[0] : null)
+        }
+      } catch {
+        if (mounted) setTuitionStage1(null)
+      }
+
+      // Audit reference (only meaningful for Final Budget but
+      // fetched unconditionally — KpiSidebar gates on stageType).
+      try {
+        const { data, error } = await supabase.rpc('get_tuition_audit_final_budget_reference_summary', {
+          p_aye_id: selectedAyeId,
+        })
+        if (!mounted) return
+        if (error) {
+          setTuitionAuditRef(null)
+        } else {
+          setTuitionAuditRef(Array.isArray(data) && data.length > 0 ? data[0] : null)
+        }
+      } catch {
+        if (mounted) setTuitionAuditRef(null)
+      }
+    })()
+    return () => { mounted = false }
+  }, [selectedAyeId])
 
   const initialMountRef = useRef(true)
   useEffect(() => {
@@ -1267,7 +1333,12 @@ function BudgetStage() {
             )}
           </div>
 
-          <KpiSidebar kpis={kpis} />
+          <KpiSidebar
+            kpis={kpis}
+            stageType={stage?.stage_type}
+            tuitionStage1={tuitionStage1}
+            tuitionAuditRef={tuitionAuditRef}
+          />
         </div>
       </div>
 

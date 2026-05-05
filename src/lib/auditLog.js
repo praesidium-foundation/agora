@@ -158,6 +158,10 @@ export function classifyEvent(event) {
     // surfaces them.
     if (event.reason.startsWith('import_accepted')) return 'import_accepted'
     if (event.reason.startsWith('import_rejected')) return 'import_rejected'
+    // v3.8.20 (Tuition-CrossModule-KPIs): snapshot promoted as the
+    // Final Budget reference for the AYE. Migration 043 writes the
+    // synthetic change_log row pointed at the scenario.
+    if (event.reason.startsWith('snapshot_promoted')) return 'snapshot_promoted'
   }
 
   if (fieldByName.__insert__) return 'insert'
@@ -167,6 +171,7 @@ export function classifyEvent(event) {
   if (fieldByName.__snapshot_captured__) return 'snapshot_captured'
   if (fieldByName.__import_accepted__)   return 'import_accepted'
   if (fieldByName.__import_rejected__)   return 'import_rejected'
+  if (fieldByName.__snapshot_promoted__) return 'snapshot_promoted'
 
   const stateField = fieldByName.state
   if (stateField) {
@@ -539,6 +544,19 @@ export function summarizeEvent(event) {
       return reason
         ? `Rejected import${filePart}. Reason: "${reason}"`
         : `Rejected import${filePart}`
+    }
+    case 'snapshot_promoted': {
+      // v3.8.20: synthetic event from mark_snapshot_as_final_budget_
+      // reference. new_value carries { snapshot_id, label, promoted_at }.
+      const f = event.fields.find((x) => x.field_name === '__snapshot_promoted__')
+      const meta = (f && f.new_value && typeof f.new_value === 'object') ? f.new_value : {}
+      let label = meta.label || null
+      if (!label && event.reason && event.reason.startsWith('snapshot_promoted: ')) {
+        label = event.reason.slice('snapshot_promoted: '.length).trim()
+      }
+      return label
+        ? `Promoted snapshot to Final Budget reference: "${label}"`
+        : `Promoted snapshot to Final Budget reference`
     }
     case 'amount': {
       const f = event.fields.find((x) => x.field_name === 'amount')

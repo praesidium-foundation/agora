@@ -17,11 +17,28 @@ import { useEffect, useState } from 'react'
 //     edProgramDollars, edProgramRatio, contributionsTotal, pctPersonnel
 //   } | null
 //
+//   stageType:    'preliminary' | 'final' | other
+//                 v3.8.20 (Tuition-CrossModule-KPIs). Drives the
+//                 source for "Number of Students" and other
+//                 enrollment-dependent Tuition KPIs:
+//                   preliminary → reads from the locked Stage 1
+//                                 Tuition Planning snapshot
+//                   final       → reads from the operator-promoted
+//                                 Final Budget reference Audit
+//                                 snapshot (anchors to a fixed
+//                                 enrollment baseline; live Audit
+//                                 edits do not shift Final Budget
+//                                 KPIs)
+//
+//   tuitionStage1: row from get_latest_locked_tuition_planning RPC
+//                  or null when no Stage 1 lock exists for the AYE
+//
+//   tuitionAuditRef: row from get_tuition_audit_final_budget_
+//                    reference_summary RPC or null when no operator
+//                    has promoted a reference snapshot for the AYE.
+//                    Only consulted when stageType === 'final'.
+//
 // When `kpis` is null (no scenario yet), every value renders as "—".
-// When present, computable values render their numbers; values that
-// require modules that don't exist yet (Number of Students, Cost per
-// Student, etc.) keep their "Pending [Module]" subtitles per Section I
-// of the build spec.
 
 const STORAGE_KEY = 'agora.kpiSidebar.collapsed'
 
@@ -56,6 +73,10 @@ function fmtPct(n) {
   if (n === null || n === undefined) return '—'
   return pct1.format(n)
 }
+function fmtInt(n) {
+  if (n === null || n === undefined) return '—'
+  return new Intl.NumberFormat('en-US').format(Math.round(Number(n)))
+}
 
 function Kpi({ label, value, subtitle, valueClass = '' }) {
   return (
@@ -79,7 +100,133 @@ function Divider() {
   return <div className="border-t-[0.5px] border-white/10 my-4" />
 }
 
-function KpiSidebar({ kpis }) {
+// Compute the cross-module Tuition KPIs based on stage + reference
+// data. Returns an object keyed by KPI name with `{ value, subtitle }`
+// per slot. The KpiSidebar caller renders these directly.
+//
+// The "—" sentinel and "Pending …" subtitles work in tandem: when an
+// upstream piece is missing, the value collapses to "—" and the
+// subtitle names which upstream is missing so the operator knows
+// what to do.
+function computeTuitionKpis({ kpis, stageType, tuitionStage1, tuitionAuditRef }) {
+  const totalExpense = kpis?.totalExpense
+  const baseRate = tuitionStage1?.base_rate
+  const stage1HasLock = tuitionStage1 != null
+
+  // Number of Students:
+  //   final       → audit reference's total_students
+  //   preliminary → Stage 1 snapshot's total_students projection
+  let studentsValue, studentsSubtitle
+  if (stageType === 'final') {
+    if (tuitionAuditRef?.total_students != null && tuitionAuditRef.total_students > 0) {
+      studentsValue = fmtInt(tuitionAuditRef.total_students)
+      studentsSubtitle = 'From promoted Audit reference'
+    } else {
+      studentsValue = '—'
+      studentsSubtitle = 'Pending Final Budget reference snapshot'
+    }
+  } else {
+    if (stage1HasLock && tuitionStage1.total_students != null) {
+      studentsValue = fmtInt(tuitionStage1.total_students)
+      studentsSubtitle = 'From locked Tuition Planning'
+    } else {
+      studentsValue = '—'
+      studentsSubtitle = 'Pending Tuition Planning lock'
+    }
+  }
+
+  // Current Tuition: base rate from Stage 1 (same source for both
+  // budget stages — what the school is charging is set in Stage 1).
+  let tuitionValue, tuitionSubtitle
+  if (stage1HasLock && baseRate > 0) {
+    tuitionValue = fmtUsd(baseRate)
+    tuitionSubtitle = 'Base rate · 1 student'
+  } else {
+    tuitionValue = '—'
+    tuitionSubtitle = 'Pending Tuition Planning lock'
+  }
+
+  // Cost per Student: totalExpense / number_of_students. Uses the
+  // appropriate students source per stage.
+  const enrolledForCpS = stageType === 'final'
+    ? tuitionAuditRef?.total_students
+    : tuitionStage1?.total_students
+  let costPerStudentValue, costPerStudentSubtitle
+  if (totalExpense != null && totalExpense > 0 && enrolledForCpS != null && enrolledForCpS > 0) {
+    costPerStudentValue = fmtUsd(totalExpense / enrolledForCpS)
+    costPerStudentSubtitle = stageType === 'final' ? 'Expenses ÷ audit enrollment' : 'Expenses ÷ projected enrollment'
+  } else {
+    costPerStudentValue = '—'
+    if (totalExpense == null || totalExpense <= 0) {
+      costPerStudentSubtitle = 'Pending expense entry'
+    } else if (stageType === 'final') {
+      costPerStudentSubtitle = 'Pending Final Budget reference snapshot'
+    } else {
+      costPerStudentSubtitle = 'Pending Tuition Planning lock'
+    }
+  }
+
+  // Tuition Gap: cost_per_student − base_rate. The shortfall the
+  // school covers via contributions / FA / etc. Positive number =
+  // gap exists.
+  let gapValue, gapSubtitle
+  if (totalExpense != null && totalExpense > 0
+      && enrolledForCpS != null && enrolledForCpS > 0
+      && baseRate != null && baseRate > 0) {
+    gapValue = fmtUsd(totalExpense / enrolledForCpS - baseRate)
+    gapSubtitle = 'Cost per student − tuition'
+  } else {
+    gapValue = '—'
+    gapSubtitle = totalExpense == null
+      ? 'Pending expense entry'
+      : (stageType === 'final' && tuitionAuditRef == null
+          ? 'Pending Final Budget reference snapshot'
+          : 'Pending Tuition Planning lock')
+  }
+
+  // Break-even Enrollment:
+  //   preliminary → read pre-computed kpi_breakeven_enrollment from
+  //                 the Stage 1 snapshot directly (the value was
+  //                 captured at lock time per Migration 032).
+  //   final       → compute live: ceil(totalExpense / avg_net_per_student)
+  //                 where avg_net_per_student = audit.net_tuition_for_year
+  //                 / audit.total_students. This is sensitive to live
+  //                 Final Budget edits but anchors to the audit's
+  //                 fixed actual-enrollment baseline.
+  let breakevenValue, breakevenSubtitle
+  if (stageType === 'final') {
+    if (totalExpense != null && totalExpense > 0
+        && tuitionAuditRef?.total_students != null && tuitionAuditRef.total_students > 0
+        && tuitionAuditRef.net_tuition_for_year != null && tuitionAuditRef.net_tuition_for_year > 0) {
+      const avgNetPerStudent = tuitionAuditRef.net_tuition_for_year / tuitionAuditRef.total_students
+      breakevenValue = fmtInt(Math.ceil(totalExpense / avgNetPerStudent))
+      breakevenSubtitle = 'At audit reference avg NET'
+    } else {
+      breakevenValue = '—'
+      breakevenSubtitle = totalExpense == null
+        ? 'Pending expense entry'
+        : 'Pending Final Budget reference snapshot'
+    }
+  } else {
+    if (stage1HasLock && tuitionStage1.breakeven_enrollment != null) {
+      breakevenValue = fmtInt(tuitionStage1.breakeven_enrollment)
+      breakevenSubtitle = 'From Tuition Planning'
+    } else {
+      breakevenValue = '—'
+      breakevenSubtitle = 'Pending Tuition Planning lock'
+    }
+  }
+
+  return {
+    students:       { value: studentsValue,       subtitle: studentsSubtitle },
+    tuition:        { value: tuitionValue,        subtitle: tuitionSubtitle },
+    costPerStudent: { value: costPerStudentValue, subtitle: costPerStudentSubtitle },
+    gap:            { value: gapValue,            subtitle: gapSubtitle },
+    breakeven:      { value: breakevenValue,      subtitle: breakevenSubtitle },
+  }
+}
+
+function KpiSidebar({ kpis, stageType, tuitionStage1, tuitionAuditRef }) {
   const [collapsed, setCollapsed] = useState(loadInitialCollapsed)
 
   useEffect(() => {
@@ -111,20 +258,38 @@ function KpiSidebar({ kpis }) {
     )
   }
 
-  // KPI panel rendering. When `kpis` is null, every computed value
-  // collapses to "—" (the formatters handle null). When non-null, the
-  // computed values come straight from the math; the placeholder slots
-  // (Number of Students, Tuition, etc.) keep their static "Pending"
-  // subtitles because they require modules that don't yet exist.
   const k = kpis || {}
   const netClass =
     k.netIncome !== undefined && k.netIncome !== null && k.netIncome < 0
-      ? 'text-status-red-bg'  // light red on dark; visible without screaming
+      ? 'text-status-red-bg'
       : ''
   const netSubtitle =
     k.netIncome !== undefined && k.netIncome !== null && k.netIncome < 0
       ? 'deficit'
       : null
+
+  // Cross-module Tuition KPIs (v3.8.20). Computed from kpis +
+  // upstream Tuition data per stage.
+  const tuitionKpis = computeTuitionKpis({ kpis, stageType, tuitionStage1, tuitionAuditRef })
+
+  // Reference info for Final Budget — quiet single-line note
+  // showing which Audit snapshot the cross-module KPIs are reading.
+  const showRefNote = stageType === 'final' && tuitionAuditRef != null
+  const refLabelStr = tuitionAuditRef?.snapshot_label || 'Audit reference'
+  const refDateStr = tuitionAuditRef?.captured_at
+    ? new Date(tuitionAuditRef.captured_at).toLocaleDateString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric',
+      })
+    : null
+
+  // Reference info for Preliminary Budget — quiet single-line note
+  // showing which Stage 1 snapshot we're reading.
+  const showStage1Note = stageType === 'preliminary' && tuitionStage1 != null
+  const stage1DateStr = tuitionStage1?.captured_at
+    ? new Date(tuitionStage1.captured_at).toLocaleDateString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric',
+      })
+    : null
 
   return (
     <aside className="bg-navy text-white w-[220px] flex-shrink-0 px-5 py-5 overflow-y-auto">
@@ -132,8 +297,6 @@ function KpiSidebar({ kpis }) {
         <span className="font-display text-[12px] text-gold/85 tracking-[0.14em] uppercase">
           Key Metrics
         </span>
-        {/* Expanded panel, right-side chevron points RIGHT (▸) to
-            suggest "click to collapse outward toward the page edge." */}
         <button
           type="button"
           onClick={() => setCollapsed(true)}
@@ -167,12 +330,33 @@ function KpiSidebar({ kpis }) {
 
         <Divider />
 
-        <Kpi label="Number of Students" value="—" subtitle="Pending Enrollment Estimator" />
-        <Kpi label="Cost per Student"   value="—" subtitle="Pending Enrollment Estimator" />
-        <Kpi label="Current Tuition"    value="—" subtitle="Pending Tuition Worksheet" />
-        <Kpi label="Tuition Gap"        value="—" subtitle="Pending Tuition Worksheet" />
-        <Kpi label="Break-even Enrollment" value="—" subtitle="Pending Tuition Worksheet" />
-        <Kpi label="Cash Reserve Months" value="—" subtitle="Pending Cash Flow integration" />
+        {/* Cross-module Tuition KPIs (v3.8.20). Wired through
+            tuitionStage1 (Stage 1 lock snapshot) and tuitionAuditRef
+            (Final Budget reference Audit snapshot). */}
+        <Kpi label="Number of Students"   value={tuitionKpis.students.value}       subtitle={tuitionKpis.students.subtitle} />
+        <Kpi label="Cost per Student"     value={tuitionKpis.costPerStudent.value} subtitle={tuitionKpis.costPerStudent.subtitle} />
+        <Kpi label="Current Tuition"      value={tuitionKpis.tuition.value}        subtitle={tuitionKpis.tuition.subtitle} />
+        <Kpi label="Tuition Gap"          value={tuitionKpis.gap.value}            subtitle={tuitionKpis.gap.subtitle} />
+        <Kpi label="Break-even Enrollment" value={tuitionKpis.breakeven.value}     subtitle={tuitionKpis.breakeven.subtitle} />
+        <Kpi label="Cash Reserve Months"  value="—" subtitle="Pending Cash Flow integration" />
+
+        {(showRefNote || showStage1Note) && (
+          <div className="border-t-[0.5px] border-white/10 pt-3 mt-3">
+            {showRefNote && (
+              <p className="font-body italic text-[10px] text-white/50 leading-tight">
+                Tuition Audit reference:{' '}
+                <span className="not-italic text-white/70">{refLabelStr}</span>
+                {refDateStr ? <> — {refDateStr}</> : null}
+              </p>
+            )}
+            {showStage1Note && (
+              <p className="font-body italic text-[10px] text-white/50 leading-tight">
+                Tuition Planning reference: locked
+                {stage1DateStr ? <> {stage1DateStr}</> : ''}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </aside>
   )
