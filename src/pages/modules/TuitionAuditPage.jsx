@@ -261,9 +261,19 @@ function TuitionAuditPage() {
       setFamilies([])
       return
     }
+    // v3.8.25: multi_student_discount_amount added to the SELECT.
+    // The column was added by Migration 045 (v3.8.21) and the table
+    // cell + save handler were updated to read/write it, but THIS
+    // SELECT was missed. Result: writes succeeded (the patch path
+    // forwards any column in `patch` to Supabase) but the column was
+    // never pulled back on page load — so on refresh the family
+    // object had `undefined` for the field, computeFamilyMultiStudent
+    // Discount fell to auto-compute, and the operator's override
+    // appeared to "revert" to the auto value. This was the v3.8.25
+    // root cause for the per-family editor save-persistence symptom.
     const { data, error } = await supabase
       .from('tuition_worksheet_family_details')
-      .select('id, scenario_id, family_label, students_enrolled, applied_tier_size, applied_tier_rate, faculty_discount_amount, other_discount_amount, financial_aid_amount, notes, is_faculty_family, date_enrolled, date_withdrawn, created_at, updated_at')
+      .select('id, scenario_id, family_label, students_enrolled, applied_tier_size, applied_tier_rate, faculty_discount_amount, other_discount_amount, financial_aid_amount, multi_student_discount_amount, notes, is_faculty_family, date_enrolled, date_withdrawn, created_at, updated_at')
       .eq('scenario_id', activeScenarioId)
       .order('created_at', { ascending: true })
     if (error) {

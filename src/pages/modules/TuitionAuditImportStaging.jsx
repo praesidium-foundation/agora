@@ -83,9 +83,17 @@ function TuitionAuditImportStaging() {
       // Fetch existing family_details rows for the envelope-tracker
       // preview (append vs replace would produce different
       // post-accept totals).
+      // v3.8.25: multi_student_discount_amount added to match the
+      // M045 column the envelope-tracker preview consumes via
+      // computeEnvelopesUsed → computeFamilyMultiStudentDiscount.
+      // Without the column in this SELECT, an existing family with a
+      // stored Multi-Student override would have its override silently
+      // ignored on the import preview's "Used" total, understating
+      // the multi-student envelope consumed. Same root cause as the
+      // primary loadFamilies omission fixed in TuitionAuditPage.jsx.
       const { data: familyRows, error: familyErr } = await supabase
         .from('tuition_worksheet_family_details')
-        .select('id, students_enrolled, applied_tier_size, applied_tier_rate, faculty_discount_amount, other_discount_amount, financial_aid_amount, is_faculty_family')
+        .select('id, students_enrolled, applied_tier_size, applied_tier_rate, faculty_discount_amount, other_discount_amount, financial_aid_amount, multi_student_discount_amount, is_faculty_family')
         .eq('scenario_id', batchRow.scenario_id)
       if (familyErr) throw familyErr
       setExistingFamilies(familyRows || [])
