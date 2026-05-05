@@ -39,7 +39,7 @@ import TuitionImportUploadModal from '../../components/tuition/TuitionImportUplo
 //   │ ┌ Tier Rates ┐ ┌ Discount Envelopes ┐ ┌ Enrolled Families ┐  │
 //   │ └─────────────┘ └─────────────────────┘ └─────────────────────┘  │
 //   ├─ Action bar ────────────────────────────────────────────────────┤
-//   │ Sort By · + Add Family · + Import CSV · · · {N} fam · {M} stu │
+//   │ Sort By · + Add Family · + Import CSV · · · {N} families · {M} students │
 //   ├─ Family table (15 columns, sticky header, vertical dividers) ──┤
 //   │ ...                                                             │
 //   └─────────────────────────────────────────────────────────────────┘
@@ -805,7 +805,11 @@ function EnrolledFamiliesCard({ distribution, netForYear }) {
         <p className="text-body text-[13px] flex items-baseline justify-between">
           <span>Total</span>
           <span className="tabular-nums">
-            <strong className="font-medium">{distribution.totalFamilies}</strong> fam · <strong className="font-medium">{distribution.totalStudents}</strong> stu
+            <strong className="font-medium">{distribution.totalFamilies}</strong>{' '}
+            {distribution.totalFamilies === 1 ? 'family' : 'families'}
+            {' · '}
+            <strong className="font-medium">{distribution.totalStudents}</strong>{' '}
+            {distribution.totalStudents === 1 ? 'student' : 'students'}
           </span>
         </p>
         <p className="text-body text-[13px] flex items-baseline justify-between mt-1">

@@ -94,6 +94,13 @@ export default function TuitionImportUploadModal({ scenario, ayeLabel, onCancel,
 
     // Step 3: build the parsed_rows jsonb payload for the RPC.
     // The RPC expects each row keyed by snake_case schema column.
+    //
+    // v3.8.19: include client_parse_errors and client_parse_warnings
+    // alongside the normalized data so the server can preserve
+    // client-detected issues (e.g., unparseable date strings the
+    // client coerced to null) AND merge them with server-side
+    // validation outcomes. Without this, a client-flagged
+    // unparseable-date error would be lost on the round-trip.
     const parsedRowsPayload = normalized.rows.map((r) => ({
       family_label:           r.normalized.family_label,
       students_enrolled:      r.normalized.students_enrolled,
@@ -104,6 +111,8 @@ export default function TuitionImportUploadModal({ scenario, ayeLabel, onCancel,
       other_discount_amount:   r.normalized.other_discount_amount,
       financial_aid_amount:    r.normalized.financial_aid_amount,
       notes:                   r.normalized.notes,
+      client_parse_errors:     r.errors,
+      client_parse_warnings:   r.warnings,
       raw_row:                 r.raw_row,
     }))
 

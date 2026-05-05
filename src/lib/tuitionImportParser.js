@@ -125,7 +125,7 @@ function parseDate(raw) {
   m = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(s)
   if (m) return makeISO('20' + m[3], m[1], m[2])
 
-  return { error: `Could not parse date "${raw}". Accepted formats: MM/DD/YYYY, M/D/YY, YYYY-MM-DD.` }
+  return { error: 'Date format not recognized. Use MM/DD/YYYY or YYYY-MM-DD.' }
 }
 
 function makeISO(yyyy, mm, dd) {
@@ -165,6 +165,12 @@ function formatISO(dt) {
 //                                        coerced to absolute, warning
 //                                        surfaced)
 
+// Spec-aligned currency warning message (v3.8.19). The same string
+// surfaces in both client-side warnings and server-side warnings so
+// staging UI shows one consistent message regardless of which layer
+// detected the negativity.
+const NEG_DISCOUNT_WARNING = 'Discounts are entered as positive numbers; the system displays them as negative on the page.'
+
 function parseCurrency(raw) {
   if (raw == null || raw === '') return null
   let s = String(raw).trim()
@@ -173,10 +179,7 @@ function parseCurrency(raw) {
   // SheetJS may pass through native number cells.
   if (typeof raw === 'number') {
     if (raw < 0) {
-      return {
-        warning: 'Discount amounts must be entered as positive numbers; the system displays them as negative on the page.',
-        value: Math.abs(raw),
-      }
+      return { warning: NEG_DISCOUNT_WARNING, value: Math.abs(raw) }
     }
     return raw
   }
@@ -202,16 +205,10 @@ function parseCurrency(raw) {
     return { error: `Could not parse currency value "${raw}".` }
   }
   if (n < 0) {
-    return {
-      warning: 'Discount amounts must be entered as positive numbers; the system displays them as negative on the page.',
-      value: Math.abs(n),
-    }
+    return { warning: NEG_DISCOUNT_WARNING, value: Math.abs(n) }
   }
   if (negativeFormat) {
-    return {
-      warning: 'Discount amounts should be entered as positive numbers; the system displays them as negative on the page. Treated as positive.',
-      value: n,
-    }
+    return { warning: NEG_DISCOUNT_WARNING, value: n }
   }
   return n
 }
@@ -324,14 +321,17 @@ export function normalizeRow(rawRow, rowIndex) {
     }
   }
 
-  // Currencies.
+  // Currencies. parseCurrency returns either a plain number, null,
+  // or { error / warning, value } — `warning` carries the message
+  // string directly. Use `r.warning` for the message; `r.value`
+  // carries the absolute value to stage.
   for (const f of ['faculty_discount_amount', 'other_discount_amount', 'financial_aid_amount']) {
     const r = parseCurrency(mapped[f])
     if (r != null && typeof r === 'object') {
       if ('error' in r) {
         errors.push({ field: f, message: r.error })
       } else if ('warning' in r) {
-        warnings.push({ field: f, message: r.message || r.warning })
+        warnings.push({ field: f, message: r.warning })
         out[f] = r.value
       }
     } else {
@@ -343,6 +343,17 @@ export function normalizeRow(rawRow, rowIndex) {
   if (mapped.notes != null) {
     const notes = String(mapped.notes).trim()
     if (notes.length > 0) out.notes = notes
+  }
+
+  // v3.8.19 — date-order sanity warning. When both dates are present
+  // AND date_withdrawn is before date_enrolled, surface as a warning
+  // (not an error). Operationally there are edge cases where unusual
+  // date relationships are legitimate; the operator decides.
+  if (out.date_enrolled && out.date_withdrawn && out.date_withdrawn < out.date_enrolled) {
+    warnings.push({
+      field: 'date_withdrawn',
+      message: 'Withdrawal date appears to be before the enrollment date.',
+    })
   }
 
   return {

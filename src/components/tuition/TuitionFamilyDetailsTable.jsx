@@ -676,6 +676,10 @@ function NotesCell({ value, readOnly, onSave }) {
     )
   }
 
+  // v3.8.19: placeholder removed per operator feedback. The muted
+  // hint text was visually distracting in the dense table view; an
+  // empty cell now reads as truly empty in both display and edit
+  // states.
   return (
     <textarea
       value={draft}
@@ -686,7 +690,6 @@ function NotesCell({ value, readOnly, onSave }) {
         if (draft !== value) onSave(draft)
       }}
       rows={focused ? 4 : 1}
-      placeholder="Audit context, FA committee notes, board annotations…"
       className="w-full bg-transparent border-[0.5px] border-transparent hover:border-card-border focus:border-navy focus:bg-white px-2 py-1 rounded text-body text-[12px] leading-relaxed resize-none focus:outline-none italic"
     />
   )
