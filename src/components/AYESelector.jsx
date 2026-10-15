@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 
 function AYESelector({ value, onChange }) {
   const [ayes, setAyes] = useState([])
+  const [currentId, setCurrentId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -10,28 +11,39 @@ function AYESelector({ value, onChange }) {
     let mounted = true
 
     async function load() {
-      const { data, error: fetchError } = await supabase
-        .from('academic_years')
-        .select('id, label, is_current')
-        .order('start_date', { ascending: false })
+      // v3.8.27: date-driven current AYE via get_current_academic_year()
+      // RPC (M048) — fetches the full list and the current row in
+      // parallel; the current id drives both the default-pick on first
+      // load and the "(current)" suffix at render time.
+      const [listResult, currentResult] = await Promise.all([
+        supabase
+          .from('academic_years')
+          .select('id, label')
+          .order('start_date', { ascending: false }),
+        supabase.rpc('get_current_academic_year'),
+      ])
 
       if (!mounted) return
 
-      if (fetchError) {
-        setError(fetchError.message)
+      if (listResult.error) {
+        setError(listResult.error.message)
         setLoading(false)
         return
       }
 
-      const list = data || []
+      const list = listResult.data || []
+      const currentAyeId = currentResult.data?.id ?? null
       setAyes(list)
+      setCurrentId(currentAyeId)
       setLoading(false)
 
       // If parent hasn't picked a value yet, default to the current AYE
-      // (or the most recent one if none is flagged current).
+      // (or the most recent one if no row covers today).
       if (!value && list.length > 0) {
-        const fallback = list.find((a) => a.is_current) || list[0]
-        onChange(fallback.id)
+        const fallbackId = currentAyeId && list.some((a) => a.id === currentAyeId)
+          ? currentAyeId
+          : list[0].id
+        onChange(fallbackId)
       }
     }
 
@@ -78,7 +90,7 @@ function AYESelector({ value, onChange }) {
         {ayes.map((aye) => (
           <option key={aye.id} value={aye.id}>
             {aye.label}
-            {aye.is_current ? ' (current)' : ''}
+            {aye.id === currentId ? ' (current)' : ''}
           </option>
         ))}
       </select>

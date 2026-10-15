@@ -5,6 +5,8 @@ const VARIANTS = {
   green: { bg: '#EAF3DE', color: '#27500A' },
   amber: { bg: '#FAEEDA', color: '#633806' },
   red:   { bg: '#FCEBEB', color: '#6F1F1F' },
+  blue:  { bg: '#E6EEF8', color: '#2A3F60' },
+  muted: { bg: '#EEEEEE', color: '#6B6B6B' },
 }
 
 function Badge({ variant = 'navy', children }) {

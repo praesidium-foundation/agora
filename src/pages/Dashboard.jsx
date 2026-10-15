@@ -35,11 +35,11 @@ function Dashboard() {
   useEffect(() => {
     let mounted = true
     async function load() {
-      const { data } = await supabase
-        .from('academic_years')
-        .select('label, start_date, end_date')
-        .eq('is_current', true)
-        .maybeSingle()
+      // v3.8.27: date-driven current AYE via get_current_academic_year()
+      // RPC (M048) — the pre-M048 `is_current` boolean was dropped. The
+      // RPC returns the AYE row whose [start_date, end_date] window
+      // covers today, or NULL if no row matches.
+      const { data } = await supabase.rpc('get_current_academic_year')
       if (mounted) setAye(data ?? null)
     }
     load()

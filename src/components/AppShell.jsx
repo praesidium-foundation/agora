@@ -401,42 +401,53 @@ function AppShell({ children }) {
     })
   }
 
-  // Load current AYE + locked module instances + budget workflow stages
-  // in parallel. The three calls are independent of each other; running
-  // them together keeps first-paint snappy.
+  // Load current AYE + locked module instances + budget workflow stages.
+  // v3.8.27: date-driven current AYE via get_current_academic_year() RPC
+  // (M048). The RPC returns a single row (no embedded join), so the
+  // locked-module lookup is now a separate query filtered by the
+  // returned aye_id instead of an inline embed. Round-trip count:
+  //   - get_current_academic_year() + get_module_workflow_stages (parallel)
+  //   - module_instances query (sequential, only when AYE exists)
+  // One extra round trip vs. the pre-M048 embed; acceptable to retire
+  // the manually-managed boolean.
   useEffect(() => {
     let mounted = true
     async function load() {
       const [ayeResult, stagesResult] = await Promise.all([
-        supabase
-          .from('academic_years')
-          .select('id, label, module_instances(state, modules(code))')
-          .eq('is_current', true)
-          .maybeSingle(),
+        supabase.rpc('get_current_academic_year'),
         supabase.rpc('get_module_workflow_stages', { p_module_code: 'budget' }),
       ])
 
       if (!mounted) return
-
-      if (!ayeResult.data) {
-        setAye(null)
-        setLockedCodes(new Set())
-      } else {
-        setAye({ id: ayeResult.data.id, label: ayeResult.data.label })
-        const locked = new Set()
-        for (const mi of ayeResult.data.module_instances || []) {
-          if (mi.state === 'locked' && mi.modules?.code) {
-            locked.add(mi.modules.code)
-          }
-        }
-        setLockedCodes(locked)
-      }
 
       // Workflow stages — silently fall back to empty list on failure
       // (the slot markers will render as "Pending workflow" placeholders).
       if (!stagesResult.error && stagesResult.data) {
         setBudgetStages(stagesResult.data)
       }
+
+      if (!ayeResult.data) {
+        setAye(null)
+        setLockedCodes(new Set())
+        return
+      }
+
+      setAye({ id: ayeResult.data.id, label: ayeResult.data.label })
+
+      const { data: miData } = await supabase
+        .from('module_instances')
+        .select('state, modules(code)')
+        .eq('aye_id', ayeResult.data.id)
+
+      if (!mounted) return
+
+      const locked = new Set()
+      for (const mi of miData || []) {
+        if (mi.state === 'locked' && mi.modules?.code) {
+          locked.add(mi.modules.code)
+        }
+      }
+      setLockedCodes(locked)
     }
     load()
     return () => {

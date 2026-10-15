@@ -42,8 +42,9 @@ begin
     raise exception 'PRECONDITION FAILED: jennsalazar@hotmail.com not in auth.users';
   end if;
 
-  -- Use the current AYE.
-  select id into v_aye_id from academic_years where is_current = true limit 1;
+  -- Use the current AYE. Date-driven via get_current_academic_year()
+  -- (M048, v3.8.27) — the pre-M048 is_current boolean was dropped.
+  select id into v_aye_id from get_current_academic_year();
   if v_aye_id is null then
     raise exception 'PRECONDITION FAILED: no current AYE';
   end if;
